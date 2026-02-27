@@ -3,6 +3,7 @@ package runtimetestrt
 import (
 	"strconv"
 
+	"github.com/cryptowizard0/vmdocker_agent/common"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 	goarSchema "github.com/permadao/goar/schema"
 )
@@ -11,6 +12,8 @@ const (
 	TestRuntimeActionPing = "Ping"
 	TestRuntimeActionEcho = "Echo"
 )
+
+var log = common.NewLog("runtime_testrt")
 
 type RuntimeTest struct{}
 
@@ -22,6 +25,7 @@ func (r *RuntimeTest) Apply(from string, meta vmmSchema.Meta, params map[string]
 	if params == nil {
 		params = map[string]string{}
 	}
+	log.Info("apply received", "from", from, "meta", meta, "params", params)
 
 	action := meta.Action
 	if action == "" {
@@ -54,7 +58,7 @@ func (r *RuntimeTest) Apply(from string, meta vmmSchema.Meta, params map[string]
 		target = params["From"]
 	}
 
-	return vmmSchema.Result{
+	result := vmmSchema.Result{
 		Messages: []*vmmSchema.ResMessage{
 			{
 				Sequence: sequence,
@@ -86,5 +90,8 @@ func (r *RuntimeTest) Apply(from string, meta vmmSchema.Meta, params map[string]
 			"action":  action,
 		},
 		Error: nil,
-	}, nil
+	}
+
+	log.Info("apply response", "action", action, "target", target, "sequence", sequence, "data", responseData, "messages", len(result.Messages))
+	return result, nil
 }

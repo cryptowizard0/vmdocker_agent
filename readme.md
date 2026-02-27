@@ -13,18 +13,9 @@ More about HyMatrix & Vmdocker:
 
 ## 🚀 Features
 
-- **Multi-Runtime Support**: Supports multiple execution environments
-- **Docker Integration**: Containerized deployment for consistency and scalability
-- **RESTful API**: Clean and intuitive API endpoints
-- **Production Ready**: Built with Go for high performance and reliability
-
-## 📋 Supported Runtimes
-
-| Runtime | Description |
-|---------|---------|
-| [AOS](https://github.com/cryptowizard0/aos) | AOS v2.0.1 env|
-| Ollama  | Large Language Model serving runtime |
-| Test    | Lightweight in-memory runtime for message-path verification (`RUNTIME_TYPE=test`) |
+- **Test Runtime Only**: Only in-memory test runtime is kept for protocol and message-path verification
+- **Docker Integration**: Containerized deployment for consistency
+- **RESTful API**: `/vmm/health`, `/vmm/spawn`, `/vmm/apply`
 
 ## 🐳 Quick Start with Docker
 
@@ -36,25 +27,20 @@ More about HyMatrix & Vmdocker:
 ### Build Docker Image
 
 ```bash
-# Build GoLua runtime image
-./docker_build.sh golua <VERSION>
-
-# Build Ollama runtime image
-./docker_build.sh ollama <VERSION>
+# Build test runtime image
+./docker_build.sh <VERSION>
 ```
 
 **Parameters:**
-- `golua|ollama`: Runtime type to build
 - `<VERSION>`: Image version tag (e.g., v1.0.0, latest, dev)
 
 **Examples:**
 ```bash
 # Build with specific version
-./docker_build.sh golua v1.0.0
-./docker_build.sh ollama v2.1.0
+./docker_build.sh v1.0.0
 
 # Build with latest tag
-./docker_build.sh golua latest
+./docker_build.sh latest
 ```
 
 ### Run Container
@@ -71,10 +57,10 @@ The container will start and expose the API on the configured port.
 
 ```bash
 # Run directly with Go
-go run -tags=lua53 main.go
+go run main.go
 
 # Or build and run binary
-go build -tags=lua53 -o vmdocker-container
+go build -o vmdocker-container
 ./vmdocker-container
 ```
 
@@ -82,10 +68,10 @@ go build -tags=lua53 -o vmdocker-container
 
 ```bash
 # Run all tests
-go test -tags=lua53 -v ./...
+go test -v ./...
 
 # Run tests with coverage
-go test -tags=lua53 -v -cover ./...
+go test -v -cover ./...
 ```
 
 
@@ -95,12 +81,11 @@ go test -tags=lua53 -v -cover ./...
 .
 ├── ao/                 # AO runtime files
 ├── common/             # Shared utilities
-├── runtime/            # Runtime implementations
-│   ├── runtime_ollama/ # Ollama runtime
-│   └── runtime_vmgolua/# GoLua runtime
+├── runtime/            # Runtime implementations (test runtime only)
+│   └── runtime_testrt/ # In-memory test runtime
 ├── server/             # HTTP server implementation
 ├── utils/              # Helper utilities
-├── Dockerfile.*        # Docker build files
+├── Dockerfile.testrt   # Docker build file
 ├── docker_build.sh     # Build script
 ├── docker_run.sh       # Run script
 └── main.go            # Application entry point

@@ -7,9 +7,7 @@ import (
 	"os"
 
 	"github.com/cryptowizard0/vmdocker_agent/common"
-	ollama "github.com/cryptowizard0/vmdocker_agent/runtime/runtime_ollama"
 	testrt "github.com/cryptowizard0/vmdocker_agent/runtime/runtime_testrt"
-	golua "github.com/cryptowizard0/vmdocker_agent/runtime/runtime_vmgolua"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/schema"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 	goarSchema "github.com/permadao/goar/schema"
@@ -18,9 +16,7 @@ import (
 var log = common.NewLog("runtime")
 
 const (
-	RuntimeTypeGolua  = "golua"
-	RuntimeTypeOLlama = "ollama"
-	RuntimeTypeTest   = "test"
+	RuntimeTypeTest = "test"
 )
 
 type Runtime struct {
@@ -29,20 +25,21 @@ type Runtime struct {
 
 // func New(pid, owner, cuAddr, aoDir string, data []byte, tags []goarSchema.Tag) (*Runtime, error) {
 func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag) (*Runtime, error) {
+	_ = env
+	_ = nodeAddr
+	_ = aoDir
+	_ = tags
+
 	var vm schema.IRuntime
 	var err error
 
-	runtimeType := RuntimeTypeGolua
+	runtimeType := RuntimeTypeTest
 	if envType := os.Getenv("RUNTIME_TYPE"); envType != "" {
 		runtimeType = envType
 	}
 	fmt.Println("runtime type: ", runtimeType)
 
 	switch runtimeType {
-	case RuntimeTypeGolua:
-		vm, err = golua.NewVmGolua(env, nodeAddr, aoDir, tags)
-	case RuntimeTypeOLlama:
-		vm, err = ollama.NewRuntimeOllama()
 	case RuntimeTypeTest:
 		vm, err = testrt.NewRuntimeTest()
 	default:

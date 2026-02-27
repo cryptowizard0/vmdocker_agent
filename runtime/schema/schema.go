@@ -5,11 +5,6 @@ import (
 	goarSchema "github.com/permadao/goar/schema"
 )
 
-const (
-	ModuleFormatGolua  = "golua"
-	ModuleFormatOLlama = "ollama"
-)
-
 type IRuntime interface {
 	Apply(from string, meta vmmSchema.Meta, params map[string]string) (vmmSchema.Result, error)
 }

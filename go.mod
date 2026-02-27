@@ -3,13 +3,11 @@ module github.com/cryptowizard0/vmdocker_agent
 go 1.24.2
 
 require (
-	github.com/aarzilli/golua v0.0.0-20250217091409-248753f411c4
-	github.com/cryptowizard0/vmdocker v0.0.2-0.20260227020255-7b035c4e41e7
+	github.com/cryptowizard0/vmdocker v0.0.2-0.20260227034659-8ec39bdde44e
 	github.com/getsentry/sentry-go v0.32.0
 	github.com/gin-gonic/gin v1.10.0
-	github.com/hymatrix/hymx v0.4.7
+	github.com/hymatrix/hymx v0.4.8
 	github.com/inconshreveable/log15 v2.16.0+incompatible
-	github.com/ollama/ollama v0.6.8
 	github.com/permadao/goar v1.1.1
 )
 
@@ -27,6 +25,7 @@ require (
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
