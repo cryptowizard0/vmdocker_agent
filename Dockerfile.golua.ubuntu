@@ -1,0 +1,63 @@
+# Use Ubuntu 24.04 as base image
+FROM --platform=linux/amd64 ubuntu:24.04
+
+# Set environment variables
+ENV GOLANG_VERSION=1.24.2
+ENV LUA_VERSION=5.3.4
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install basic tools
+RUN apt-get update && apt-get install -y \
+    vim \
+    wget \
+    gcc \
+    pkg-config \
+    build-essential \
+    libreadline-dev \
+    liblua5.3-dev \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go
+RUN wget https://golang.org/dl/go${GOLANG_VERSION}.linux-amd64.tar.gz \
+    && tar -C /usr/local -xzf go${GOLANG_VERSION}.linux-amd64.tar.gz \
+    && rm go${GOLANG_VERSION}.linux-amd64.tar.gz
+
+ENV PATH=$PATH:/usr/local/go/bin
+ENV GOPATH=/go
+ENV PATH=$PATH:$GOPATH/bin
+ENV GOPRIVATE=github.com/hymatrix/hymx/
+
+
+# Create working directory
+WORKDIR /_build
+
+# Initialize Go modules and download dependencies
+COPY go.mod go.sum /_build/
+
+# Copy project files
+RUN cd /_build && go mod download
+
+# RUN cd /_build && go mod tidy
+COPY  . /_build/
+
+RUN ls -l /_build
+
+# Build project
+RUN cd /_build && go build -tags=lua53 -o main
+
+# Create app directory and copy necessary files
+WORKDIR /app
+RUN cp /_build/main . && \
+    cp -r /_build/ao . && \
+    rm -rf /_build && \
+    chmod -R 555 /app/ao # set ReadOnly permission for ao directory
+
+# Set AO path
+ENV AO_PATH=/app/ao/2.0.1
+
+# Expose port
+EXPOSE 8080
+
+# Set startup command
+CMD ["/app/main"]
