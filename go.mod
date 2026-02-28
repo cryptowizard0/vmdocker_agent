@@ -3,7 +3,7 @@ module github.com/cryptowizard0/vmdocker_agent
 go 1.24.2
 
 require (
-	github.com/cryptowizard0/vmdocker v0.0.2-0.20260227034659-8ec39bdde44e
+	github.com/cryptowizard0/vmdocker v0.0.2
 	github.com/getsentry/sentry-go v0.32.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/hymatrix/hymx v0.4.8
