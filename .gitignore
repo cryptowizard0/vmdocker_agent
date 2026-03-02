@@ -34,3 +34,4 @@ debug/
 .DS_Store
 Thumbs.db
 go.sum
+codebuddy_design.md
