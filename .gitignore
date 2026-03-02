@@ -35,3 +35,5 @@ debug/
 Thumbs.db
 go.sum
 codebuddy_design.md
+
+.env

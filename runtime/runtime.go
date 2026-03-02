@@ -24,12 +24,7 @@ type Runtime struct {
 	vm schema.IRuntime
 }
 
-func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag) (*Runtime, error) {
-	_ = env
-	_ = nodeAddr
-	_ = aoDir
-	_ = tags
-
+func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag, spawnParams map[string]string) (*Runtime, error) {
 	var vm schema.IRuntime
 	var err error
 
@@ -43,7 +38,7 @@ func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag) (*Run
 	case RuntimeTypeTest:
 		vm, err = testrt.NewRuntimeTest()
 	case RuntimeTypeOpenclaw:
-		vm, err = openclaw.New()
+		vm, err = openclaw.NewWithParams(spawnParams)
 	default:
 		return nil, fmt.Errorf("runtime type not supported: %s", runtimeType)
 	}

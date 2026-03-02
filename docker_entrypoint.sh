@@ -5,6 +5,7 @@ PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
 STATE_DIR="${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-${HOME:-/root}}/.openclaw}"
 RUNTIME_CONFIG_PATH="${STATE_DIR}/openclaw.json"
+GATEWAY_READY_WAIT_SECONDS="${OPENCLAW_GATEWAY_READY_WAIT_SECONDS:-60}"
 
 health_probe() {
     node -e '
@@ -33,7 +34,7 @@ ensure_runtime_gateway_config() {
 {
   "gateway": {
     "tools": {
-      "allow": ["sessions_send"]
+      "allow": ["sessions_send", "gateway"]
     }
   },
   "tools": {
@@ -65,7 +66,7 @@ if [ "${RUNTIME_TYPE:-openclaw}" = "openclaw" ]; then
     READY_URL_HEALTH="${READY_BASE%/}/health"
 
     i=0
-    while [ $i -lt 30 ]; do
+    while [ $i -lt "${GATEWAY_READY_WAIT_SECONDS}" ]; do
         if ! kill -0 "${GW_PID}" 2>/dev/null; then
             echo "openclaw gateway exited unexpectedly"
             echo "see /tmp/openclaw-gateway.log"
@@ -80,8 +81,8 @@ if [ "${RUNTIME_TYPE:-openclaw}" = "openclaw" ]; then
         sleep 1
     done
 
-    if [ $i -eq 30 ]; then
-        echo "openclaw gateway did not become ready in time"
+    if [ $i -eq "${GATEWAY_READY_WAIT_SECONDS}" ]; then
+        echo "openclaw gateway did not become ready in ${GATEWAY_READY_WAIT_SECONDS}s"
         echo "see /tmp/openclaw-gateway.log"
         exit 1
     fi

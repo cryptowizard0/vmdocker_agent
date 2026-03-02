@@ -18,15 +18,14 @@ import (
 )
 
 const (
-	ActionPing          = "Ping"
-	ActionQuery         = "Query"
-	ActionExecute       = "Execute"
-	ActionCreateSession = "CreateSession"
-	ActionCloseSession  = "CloseSession"
-
-	DefaultToolCreateSession = "sessions_create"
-	DefaultToolSendSession   = "sessions_send"
-	DefaultToolCloseSession  = "sessions_delete"
+	ActionPing              = "Ping"
+	ActionQuery             = "Query"
+	ActionExecute           = "Execute"
+	ActionChat              = "Chat"
+	ActionCreateSession     = "CreateSession"
+	ActionCloseSession      = "CloseSession"
+	ActionConfigureModel    = "ConfigureModel"
+	ActionConfigureTelegram = "ConfigureTelegram"
 )
 
 var log = common.NewLog("openclaw")
@@ -49,16 +48,23 @@ func LoadConfigFromEnv() schema.Config {
 		Token:   os.Getenv("OPENCLAW_GATEWAY_TOKEN"),
 		Timeout: time.Duration(timeoutMs) * time.Millisecond,
 		ActionEndpoints: map[string]schema.Endpoint{
-			ActionPing:          {Method: http.MethodGet, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_PING", "/health")},
-			ActionQuery:         {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_QUERY", "/tools/invoke")},
-			ActionExecute:       {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_EXECUTE", "/tools/invoke")},
-			ActionCreateSession: {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CREATE_SESSION", "/tools/invoke")},
-			ActionCloseSession:  {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CLOSE_SESSION", "/tools/invoke")},
+			ActionPing:              {Method: http.MethodGet, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_PING", "/health")},
+			ActionQuery:             {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_QUERY", "/tools/invoke")},
+			ActionExecute:           {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_EXECUTE", "/tools/invoke")},
+			ActionChat:              {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CHAT", "/tools/invoke")},
+			ActionCreateSession:     {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CREATE_SESSION", "/tools/invoke")},
+			ActionCloseSession:      {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CLOSE_SESSION", "/tools/invoke")},
+			ActionConfigureModel:    {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CONFIGURE_MODEL", "/tools/invoke")},
+			ActionConfigureTelegram: {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CONFIGURE_TELEGRAM", "/tools/invoke")},
 		},
 	}
 }
 
 func New() (*Openclaw, error) {
+	return NewWithParams(nil)
+}
+
+func NewWithParams(spawnParams map[string]string) (*Openclaw, error) {
 	cfg := LoadConfigFromEnv()
 	client := NewHTTPGatewayClient(cfg)
 
@@ -74,9 +80,9 @@ func New() (*Openclaw, error) {
 		state:  schema.RuntimeState{},
 	}
 
-	createCtx, createCancel := context.WithTimeout(context.Background(), cfg.Timeout)
-	defer createCancel()
-	if err := rt.createSession(createCtx); err != nil {
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer setupCancel()
+	if err := rt.SetupOnSpawn(setupCtx, spawnParams); err != nil {
 		return nil, err
 	}
 
@@ -114,22 +120,27 @@ func (r *Openclaw) Apply(from string, meta vmmSchema.Meta, params map[string]str
 			return vmmSchema.Result{}, fmt.Errorf("openclaw apply failed: %w", err)
 		}
 	case ActionCreateSession:
-		if err := r.createSession(ctx); err != nil {
+		resp, err = r.CreateSession(ctx)
+		if err != nil {
 			return vmmSchema.Result{}, fmt.Errorf("openclaw apply failed: %w", err)
 		}
-		sessionID := r.sessionID()
-		responseData = sessionID
-		resp = &schema.GatewayResponse{
-			StatusCode: http.StatusOK,
-			Status:     "200 session created",
-			Data:       sessionID,
-			Body:       sessionID,
-			JSON: map[string]interface{}{
-				"sessionId": sessionID,
-			},
-		}
+		responseData = r.sessionID()
 	case ActionCloseSession:
 		resp, responseData, err = r.closeSession(ctx)
+		if err != nil {
+			return vmmSchema.Result{}, fmt.Errorf("openclaw apply failed: %w", err)
+		}
+	case ActionConfigureTelegram:
+		resp, err = r.ConfigureTelegram(ctx, params)
+		if err != nil {
+			return vmmSchema.Result{}, fmt.Errorf("openclaw apply failed: %w", err)
+		}
+	case ActionConfigureModel:
+		model := extractModelName(meta, params)
+		if model == "" {
+			return vmmSchema.Result{}, fmt.Errorf("openclaw apply failed: model is empty")
+		}
+		resp, err = r.ConfigureModel(ctx, model)
 		if err != nil {
 			return vmmSchema.Result{}, fmt.Errorf("openclaw apply failed: %w", err)
 		}
@@ -183,6 +194,19 @@ func (r *Openclaw) Apply(from string, meta vmmSchema.Meta, params map[string]str
 		{Name: "Reference", Value: requestID},
 	}
 
+	output := map[string]interface{}{
+		"runtime":       "openclaw",
+		"action":        action,
+		"requestId":     requestID,
+		"gatewayStatus": resp.Status,
+		"statusCode":    resp.StatusCode,
+		"sessionId":     currentSessionID,
+		"gateway":       resp.JSON,
+	}
+	if action == ActionChat {
+		output["reply"] = responseData
+	}
+
 	result := vmmSchema.Result{
 		Messages: []*vmmSchema.ResMessage{
 			{
@@ -194,16 +218,8 @@ func (r *Openclaw) Apply(from string, meta vmmSchema.Meta, params map[string]str
 		},
 		Spawns:      []*vmmSchema.ResSpawn{},
 		Assignments: nil,
-		Output: map[string]interface{}{
-			"runtime":       "openclaw",
-			"action":        action,
-			"requestId":     requestID,
-			"gatewayStatus": resp.Status,
-			"statusCode":    resp.StatusCode,
-			"sessionId":     currentSessionID,
-			"gateway":       resp.JSON,
-		},
-		Data: responseData,
+		Output:      output,
+		Data:        responseData,
 		Cache: map[string]string{
 			"runtime":    "openclaw",
 			"action":     action,
@@ -217,50 +233,7 @@ func (r *Openclaw) Apply(from string, meta vmmSchema.Meta, params map[string]str
 	return result, nil
 }
 
-func (r *Openclaw) createSession(ctx context.Context) error {
-	tool := getEnvOrDefault("OPENCLAW_TOOL_CREATE_SESSION", DefaultToolCreateSession)
-	title := strings.TrimSpace(os.Getenv("OPENCLAW_SESSION_TITLE"))
-	metadata, err := loadSessionMetadataFromEnv()
-	if err != nil {
-		return err
-	}
-
-	args := map[string]interface{}{}
-	if title != "" {
-		args["title"] = title
-	}
-	if len(metadata) > 0 {
-		args["metadata"] = metadata
-	}
-
-	resp, err := r.client.Call(ctx, ActionCreateSession, newToolInvokeRequest(tool, args, ""))
-	if err != nil {
-		if strings.Contains(err.Error(), "Tool not available") {
-			fallbackSessionKey := getEnvOrDefault("OPENCLAW_SESSION_KEY", "main")
-			r.mu.Lock()
-			r.state.SessionID = fallbackSessionKey
-			r.mu.Unlock()
-			log.Warn("sessions_create not available, fallback to configured session key", "sessionKey", fallbackSessionKey)
-			return nil
-		}
-		return fmt.Errorf("create openclaw session failed: %w", err)
-	}
-
-	sessionID := extractSessionID(resp.JSON)
-	if sessionID == "" {
-		sessionID = strings.TrimSpace(resp.Data)
-	}
-	if sessionID == "" {
-		return fmt.Errorf("create openclaw session failed: empty session id in response")
-	}
-
-	r.mu.Lock()
-	r.state.SessionID = sessionID
-	r.mu.Unlock()
-
-	log.Info("openclaw session created", "sessionId", sessionID)
-	return nil
-}
+// createSession moved to setup.go as CreateSession
 
 func (r *Openclaw) closeSession(ctx context.Context) (*schema.GatewayResponse, string, error) {
 	sessionID := r.sessionID()
@@ -332,10 +305,16 @@ func normalizeAction(action string) string {
 		return ActionQuery
 	case "execute":
 		return ActionExecute
+	case "chat":
+		return ActionChat
 	case "createsession":
 		return ActionCreateSession
 	case "closesession":
 		return ActionCloseSession
+	case "configuremodel", "setmodel":
+		return ActionConfigureModel
+	case "configuretelegram", "telegramconfig", "settelegram":
+		return ActionConfigureTelegram
 	default:
 		return action
 	}
@@ -365,29 +344,6 @@ func extractTimeoutSeconds(params map[string]string) (int, bool) {
 	return 0, false
 }
 
-func resolveSendTool(action string) string {
-	switch action {
-	case ActionQuery:
-		return getEnvOrDefault("OPENCLAW_TOOL_QUERY", DefaultToolSendSession)
-	case ActionExecute:
-		return getEnvOrDefault("OPENCLAW_TOOL_EXECUTE", DefaultToolSendSession)
-	default:
-		return getEnvOrDefault("OPENCLAW_TOOL_SEND_SESSION", DefaultToolSendSession)
-	}
-}
-
-func newToolInvokeRequest(tool string, args map[string]interface{}, sessionKey string) schema.ToolInvokeRequest {
-	req := schema.ToolInvokeRequest{
-		Tool:      tool,
-		Args:      args,
-		Arguments: args,
-	}
-	if sessionKey != "" {
-		req.SessionKey = sessionKey
-	}
-	return req
-}
-
 func loadSessionMetadataFromEnv() (map[string]interface{}, error) {
 	raw := strings.TrimSpace(os.Getenv("OPENCLAW_SESSION_METADATA_JSON"))
 	if raw == "" {
@@ -399,115 +355,6 @@ func loadSessionMetadataFromEnv() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("invalid OPENCLAW_SESSION_METADATA_JSON: %w", err)
 	}
 	return metadata, nil
-}
-
-func extractData(v interface{}) string {
-	switch vv := v.(type) {
-	case nil:
-		return ""
-	case string:
-		return strings.TrimSpace(vv)
-	case map[string]interface{}:
-		for _, key := range []string{"data", "result", "message", "text", "reply", "output", "content"} {
-			if nested, ok := vv[key]; ok {
-				if out := extractData(nested); out != "" {
-					return out
-				}
-			}
-		}
-		for _, nested := range vv {
-			switch nested.(type) {
-			case map[string]interface{}, []interface{}:
-				if out := extractData(nested); out != "" {
-					return out
-				}
-			}
-		}
-	case []interface{}:
-		for _, nested := range vv {
-			if out := extractData(nested); out != "" {
-				return out
-			}
-		}
-	}
-	return ""
-}
-
-func extractSessionID(body map[string]interface{}) string {
-	if len(body) == 0 {
-		return ""
-	}
-
-	for _, path := range [][]string{
-		{"sessionId"},
-		{"sessionID"},
-		{"data", "sessionId"},
-		{"data", "sessionID"},
-		{"data", "session", "id"},
-		{"result", "sessionId"},
-		{"result", "sessionID"},
-		{"result", "session", "id"},
-	} {
-		if value := lookupStringPath(body, path...); value != "" {
-			return value
-		}
-	}
-
-	return findSessionIDRecursive(body)
-}
-
-func lookupStringPath(root map[string]interface{}, path ...string) string {
-	var current interface{} = root
-	for _, segment := range path {
-		nextMap, ok := current.(map[string]interface{})
-		if !ok {
-			return ""
-		}
-		next, ok := nextMap[segment]
-		if !ok {
-			return ""
-		}
-		current = next
-	}
-
-	text, ok := current.(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(text)
-}
-
-func findSessionIDRecursive(v interface{}) string {
-	switch vv := v.(type) {
-	case map[string]interface{}:
-		for key, value := range vv {
-			if normalizeKey(key) != "sessionid" {
-				continue
-			}
-			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-				return strings.TrimSpace(text)
-			}
-		}
-		for _, value := range vv {
-			if out := findSessionIDRecursive(value); out != "" {
-				return out
-			}
-		}
-	case []interface{}:
-		for _, value := range vv {
-			if out := findSessionIDRecursive(value); out != "" {
-				return out
-			}
-		}
-	}
-	return ""
-}
-
-func normalizeKey(key string) string {
-	key = strings.TrimSpace(strings.ToLower(key))
-	key = strings.ReplaceAll(key, "_", "")
-	key = strings.ReplaceAll(key, "-", "")
-	return key
 }
 
 func normalizePath(path string) string {

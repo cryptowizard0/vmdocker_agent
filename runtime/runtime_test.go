@@ -35,7 +35,7 @@ func TestNewRuntimeOpenclaw(t *testing.T) {
 	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
 	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
 
-	rt, err := New(vmmSchema.Env{}, "", "", nil)
+	rt, err := New(vmmSchema.Env{}, "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("new runtime failed: %v", err)
 	}
