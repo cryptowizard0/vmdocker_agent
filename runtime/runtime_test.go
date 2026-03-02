@@ -1,10 +1,12 @@
 package runtime
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	schema "github.com/cryptowizard0/vmdocker_agent/runtime/openclaw/schema"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 )
 
@@ -15,8 +17,17 @@ func TestNewRuntimeOpenclaw(t *testing.T) {
 			_, _ = w.Write([]byte(`{"status":"ok","data":"pong"}`))
 			return
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok","data":"done"}`))
+		if r.URL.Path == "/tools/invoke" {
+			var req schema.ToolInvokeRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.Tool == "sessions_create" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"status":"ok","data":{"sessionId":"runtime-sess-1"}}`))
+				return
+			}
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"status":"error"}`))
 	}))
 	defer gateway.Close()
 

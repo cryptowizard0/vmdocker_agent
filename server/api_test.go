@@ -9,8 +9,9 @@ import (
 	"testing"
 
 	vmdockerSchema "github.com/cryptowizard0/vmdocker/vmdocker/schema"
-	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
+	openclawSchema "github.com/cryptowizard0/vmdocker_agent/runtime/openclaw/schema"
 	"github.com/gin-gonic/gin"
+	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 )
 
 func setupTestServer(t *testing.T) *Server {
@@ -151,17 +152,32 @@ func TestSpawnAndApply(t *testing.T) {
 }
 
 func TestSpawnAndApplyOpenclaw(t *testing.T) {
+	createCalled := false
+	sendCalled := false
+
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "data": "pong"})
-		case "/v1/tools/invoke":
-			var payload map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&payload)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"status": "ok",
-				"data":   "handled:" + payload["action"],
-			})
+		case "/tools/invoke":
+			var req openclawSchema.ToolInvokeRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			switch req.Tool {
+			case "sessions_create":
+				createCalled = true
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"status": "ok",
+					"data":   map[string]interface{}{"sessionId": "sess-api-1"},
+				})
+			case "sessions_send":
+				sendCalled = true
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"status": "ok",
+					"data":   map[string]interface{}{"message": "handled:Execute"},
+				})
+			default:
+				http.Error(w, "unsupported tool", http.StatusBadRequest)
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -194,6 +210,7 @@ func TestSpawnAndApplyOpenclaw(t *testing.T) {
 			Sequence: 12,
 		},
 		Params: map[string]string{
+			"Command":   "hello",
 			"Reference": "12",
 		},
 	}
@@ -225,6 +242,12 @@ func TestSpawnAndApplyOpenclaw(t *testing.T) {
 	}
 	if out.Messages[0].Target != "target-oc-1" {
 		t.Fatalf("expected message target target-oc-1, got %q", out.Messages[0].Target)
+	}
+	if !createCalled {
+		t.Fatalf("expected sessions_create to be called")
+	}
+	if !sendCalled {
+		t.Fatalf("expected sessions_send to be called")
 	}
 }
 

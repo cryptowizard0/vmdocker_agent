@@ -5,8 +5,9 @@ IMAGE_NAME="${IMAGE_NAME:-chriswebber/docker-openclaw:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-hymatrix-openclaw-test}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8080}"
-RUNTIME_TYPE="${RUNTIME_TYPE:-test}"
+RUNTIME_TYPE="openclaw"
 OPENCLAW_GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://127.0.0.1:18789}"
+OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-openclaw-test-token}"
 WAIT_SECONDS="${WAIT_SECONDS:-30}"
 CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-false}"
 
@@ -19,42 +20,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
-container_running() {
-  docker ps --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"
-}
-
 container_exists() {
   docker ps -a --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"
 }
 
-if container_running; then
-  echo "[INFO] container is running: ${CONTAINER_NAME}"
-elif container_exists; then
-  echo "[INFO] starting existing container: ${CONTAINER_NAME}"
-  docker start "${CONTAINER_NAME}" >/dev/null
-else
-  echo "[INFO] starting new container: ${CONTAINER_NAME}"
-  if docker ps --format '{{.Ports}}' | grep -q ":${PORT}->"; then
-    echo "[ERROR] host port ${PORT} is already in use by another container"
-    echo "[HINT] run with a different port, e.g. PORT=18080 ./docker_test_requests.sh"
-    exit 1
-  fi
-
-  if [[ "${RUNTIME_TYPE}" == "openclaw" ]]; then
-    docker run --name "${CONTAINER_NAME}" -d \
-      -p "${PORT}:8080" \
-      -p "18789:18789" \
-      -e RUNTIME_TYPE=openclaw \
-      -e OPENCLAW_GATEWAY_URL="${OPENCLAW_GATEWAY_URL}" \
-      "${IMAGE_NAME}" >/dev/null
-  else
-    docker run --name "${CONTAINER_NAME}" -d \
-      -p "${PORT}:8080" \
-      -e RUNTIME_TYPE="${RUNTIME_TYPE}" \
-      "${IMAGE_NAME}" >/dev/null
-  fi
-  STARTED_BY_SCRIPT="true"
+if container_exists; then
+  echo "[INFO] removing existing container: ${CONTAINER_NAME}"
+  docker rm -f "${CONTAINER_NAME}" >/dev/null
 fi
+
+echo "[INFO] starting new container: ${CONTAINER_NAME}"
+if docker ps --format '{{.Ports}}' | grep -q ":${PORT}->"; then
+  echo "[ERROR] host port ${PORT} is already in use by another container"
+  echo "[HINT] run with a different port, e.g. PORT=18080 ./docker_test_requests.sh"
+  exit 1
+fi
+
+docker run --name "${CONTAINER_NAME}" -d \
+  -p "${PORT}:8080" \
+  -e RUNTIME_TYPE="${RUNTIME_TYPE}" \
+  -e OPENCLAW_GATEWAY_URL="${OPENCLAW_GATEWAY_URL}" \
+  -e OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN}" \
+  -e OPENCLAW_GATEWAY_AUTH_MODE=token \
+  -e OPENCLAW_GATEWAY_AUTH_TOKEN="${OPENCLAW_GATEWAY_TOKEN}" \
+  -e OPENCLAW_HTTP_TOOLS_INVOKE=true \
+  -e OPENCLAW_HTTP_TOOLS_INVOKE_DENY= \
+  "${IMAGE_NAME}" >/dev/null
+STARTED_BY_SCRIPT="true"
 
 BASE_URL="http://${HOST}:${PORT}/vmm"
 
@@ -86,7 +78,7 @@ curl -sS -X POST "${BASE_URL}/spawn" \
 echo "\n[INFO] apply request"
 curl -sS -X POST "${BASE_URL}/apply" \
   -H 'Content-Type: application/json' \
-  -d '{"From":"target-e2e","Meta":{"Action":"Ping","Sequence":1},"Params":{"Action":"Ping","Reference":"1"}}' \
+  -d '{"From":"target-e2e","Meta":{"Action":"Execute","Sequence":1},"Params":{"Action":"Execute","Command":"hello openclaw","Reference":"1"}}' \
   | tee /tmp/vmdocker_apply_resp.json
 
 echo "\n[DONE] responses saved to:"

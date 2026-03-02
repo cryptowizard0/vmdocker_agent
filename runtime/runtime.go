@@ -43,7 +43,7 @@ func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag) (*Run
 	case RuntimeTypeTest:
 		vm, err = testrt.NewRuntimeTest()
 	case RuntimeTypeOpenclaw:
-		vm, err = openclaw.NewRuntime()
+		vm, err = openclaw.New()
 	default:
 		return nil, fmt.Errorf("runtime type not supported: %s", runtimeType)
 	}
