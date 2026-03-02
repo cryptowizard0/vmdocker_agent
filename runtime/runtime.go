@@ -2,13 +2,13 @@ package runtime
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 
 	"github.com/cryptowizard0/vmdocker_agent/common"
-	testrt "github.com/cryptowizard0/vmdocker_agent/runtime/runtime_testrt"
+	"github.com/cryptowizard0/vmdocker_agent/runtime/openclaw"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/schema"
+	"github.com/cryptowizard0/vmdocker_agent/runtime/testrt"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 	goarSchema "github.com/permadao/goar/schema"
 )
@@ -16,20 +16,15 @@ import (
 var log = common.NewLog("runtime")
 
 const (
-	RuntimeTypeTest = "test"
+	RuntimeTypeTest     = "test"
+	RuntimeTypeOpenclaw = "openclaw"
 )
 
 type Runtime struct {
 	vm schema.IRuntime
 }
 
-// func New(pid, owner, cuAddr, aoDir string, data []byte, tags []goarSchema.Tag) (*Runtime, error) {
-func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag) (*Runtime, error) {
-	_ = env
-	_ = nodeAddr
-	_ = aoDir
-	_ = tags
-
+func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag, spawnParams map[string]string) (*Runtime, error) {
 	var vm schema.IRuntime
 	var err error
 
@@ -37,28 +32,28 @@ func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag) (*Run
 	if envType := os.Getenv("RUNTIME_TYPE"); envType != "" {
 		runtimeType = envType
 	}
-	fmt.Println("runtime type: ", runtimeType)
+	log.Info("runtime type selected", "type", runtimeType)
 
 	switch runtimeType {
 	case RuntimeTypeTest:
 		vm, err = testrt.NewRuntimeTest()
+	case RuntimeTypeOpenclaw:
+		vm, err = openclaw.NewWithParams(spawnParams)
 	default:
-		return nil, errors.New("runtime type not supported: " + runtimeType)
+		return nil, fmt.Errorf("runtime type not supported: %s", runtimeType)
 	}
 
 	if err != nil {
 		return nil, err
 	}
 
-	return &Runtime{
-		vm: vm,
-	}, nil
+	return &Runtime{vm: vm}, nil
 }
 
 func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]string) (string, error) {
 	response, err := r.vm.Apply(from, meta, params)
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("runtime apply failed: %s", err.Error()))
+		return "", fmt.Errorf("runtime apply failed: %w", err)
 	}
 	outboxJson, err := json.Marshal(response)
 	if err != nil {

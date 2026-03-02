@@ -1,233 +1,107 @@
 # VMDocker Container
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/go-1.19+-blue.svg)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/go-1.24+-blue.svg)](https://golang.org/)
 [![Docker](https://img.shields.io/badge/docker-supported-blue.svg)](https://www.docker.com/)
 
-VMDocker Container is a Docker-based runtime environment designed to execute computational tasks for **HyMatrix**, working seamlessly with **Vmdocker** for distributed computing scenarios.
+VMDocker Container is a Docker-based runtime environment designed to execute computational tasks for `HyMatrix`, working seamlessly with `Vmdocker` for distributed computing scenarios.
 
-## 🔗 Related Projects
+More about HyMatrix & Vmdocker:
+> - [Vmdocker](https://github.com/cryptowizard0/vmdocker)
+> - [HyMatrix Website](https://hymatrix.com/)
+> - [HyMatrix Documentation](https://docs.hymatrix.com/)
 
-| Project | Description | Link |
-|---------|-------------|------|
-| **Vmdocker** | Container orchestration system | [GitHub](https://github.com/cryptowizard0/vmdocker) |
-| **HyMatrix** | Distributed computation framework | [Website](https://hymatrix.com/) |
-| **AOS** | Actor Oriented System | [GitHub](https://github.com/cryptowizard0/aos) |
+## 🚀 Features
 
----
+- **Runtime Modes**: Supports `openclaw` and in-memory `test` runtimes via `RUNTIME_TYPE`
+- **Docker Integration**: Containerized deployment for consistency
+- **RESTful API**: `/vmm/health`, `/vmm/spawn`, `/vmm/apply`
 
-## 📋 Table of Contents
+## ⚙️ Configuration
 
-- [Features](#-features)
-- [Quick Start](#-quick-start)
-- [API Reference](#-api-reference)
-- [Development](#-development)
-- [Configuration](#-configuration)
-- [Contributing](#-contributing)
-- [License](#-license)
+The runtime behavior can be customized via environment variables.
 
----
+### General
+- `RUNTIME_TYPE`: Runtime implementation selector (e.g., `openclaw`, `test`).
+- `OPENCLAW_GATEWAY_URL`: Base URL for the Openclaw gateway (default: `http://127.0.0.1:18789`).
+- `OPENCLAW_GATEWAY_TOKEN`: Authentication token for the gateway (optional).
+- `OPENCLAW_TIMEOUT_MS`: Request timeout in milliseconds (default: `30000`).
 
-## ✨ Features
+### Session Management
+- `OPENCLAW_SESSION_KEY`: Fallback session key if session creation fails (default: `main`).
+- `OPENCLAW_SESSION_TITLE`: Title for the created session (optional).
+- `OPENCLAW_SESSION_METADATA_JSON`: JSON string containing initial session metadata (optional).
 
-- **🧪 Test Runtime**: In-memory test runtime for protocol and message-path verification
-- **🐳 Docker Integration**: Containerized deployment for consistency across environments
-- **🔌 RESTful API**: Simple HTTP API for lifecycle management
-- **⚡ Lightweight**: Minimal dependencies, fast startup
-- **🔒 Type-Safe**: Protocol buffer schemas for message passing
+### Tool Names
+Customize the tool names invoked on the gateway:
+- `OPENCLAW_TOOL_CREATE_SESSION`: Tool for creating sessions (default: `sessions_create`).
+- `OPENCLAW_TOOL_CLOSE_SESSION`: Tool for closing sessions (default: `sessions_delete`).
+- `OPENCLAW_TOOL_SEND_SESSION`: Default tool for sending messages (default: `sessions_send`).
+- `OPENCLAW_TOOL_QUERY`: Tool for `Query` action (default: `sessions_send`).
+- `OPENCLAW_TOOL_EXECUTE`: Tool for `Execute` action (default: `sessions_send`).
+- `OPENCLAW_TOOL_CHAT`: Tool for `Chat` action (default: `sessions_send`).
+- `OPENCLAW_TOOL_SET_MODEL`: Tool for configuring models (default: `session_status`).
+- `OPENCLAW_TOOL_GATEWAY`: Tool for gateway configuration (default: `gateway`).
 
----
+### Endpoints
+Customize the API paths appended to the gateway base URL:
+- `OPENCLAW_ENDPOINT_PING`: Path for ping action (default: `/health`).
+- `OPENCLAW_ENDPOINT_QUERY`: Path for query action (default: `/tools/invoke`).
+- `OPENCLAW_ENDPOINT_EXECUTE`: Path for execute action (default: `/tools/invoke`).
+- `OPENCLAW_ENDPOINT_CHAT`: Path for chat action (default: `/tools/invoke`).
+- `OPENCLAW_ENDPOINT_CREATE_SESSION`: Path for create session action (default: `/tools/invoke`).
+- `OPENCLAW_ENDPOINT_CLOSE_SESSION`: Path for close session action (default: `/tools/invoke`).
+- `OPENCLAW_ENDPOINT_CONFIGURE_MODEL`: Path for configure model action (default: `/tools/invoke`).
+- `OPENCLAW_ENDPOINT_CONFIGURE_TELEGRAM`: Path for configure telegram action (default: `/tools/invoke`).
 
-## 🚀 Quick Start
+## 🐳 Quick Start with Docker
 
 ### Prerequisites
 
-- [Docker](https://www.docker.com/) installed and running
-- [Go 1.19+](https://golang.org/) (for local development)
+- Docker installed and running
+- Go 1.24+ (for local development)
 
-### Option 1: Using Docker (Recommended)
+### Build Docker Image
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/cryptowizard0/vmdocker_agent.git
-cd vmdocker_agent
+# Build image
+./docker_build.sh <VERSION>
+```
 
-# 2. Build Docker image
+**Parameters:**
+- `<VERSION>`: Image version tag (e.g., v1.0.0, latest, dev)
+
+**Examples:**
+```bash
+# Build with specific version
+./docker_build.sh v1.0.0
+
+# Build with latest tag
 ./docker_build.sh latest
+```
 
-# 3. Run container
+### Run Container
+
+```bash
 ./docker_run.sh
 ```
 
-The API will be available at `http://localhost:8080`.
+The container will start and expose the API on the configured port.
 
-### Option 2: Local Development
+## 🛠️ Local Development
+
+### Running Locally
 
 ```bash
-# 1. Clone and enter directory
-git clone https://github.com/cryptowizard0/vmdocker_agent.git
-cd vmdocker_agent
-
-# 2. Install dependencies
-go mod download
-
-# 3. Run directly
+# Run directly with Go
 go run main.go
 
-# Or build binary
+# Or build and run binary
 go build -o vmdocker-container
 ./vmdocker-container
 ```
 
----
-
-## 📡 API Reference
-
-### Base URL
-```
-http://localhost:8080/vmm
-```
-
-### Endpoints
-
-#### 1. Health Check
-Check if the service is running.
-
-```http
-POST /vmm/health
-```
-
-**Response:**
-```json
-{
-  "status": "ok"
-}
-```
-
-#### 2. Spawn Runtime
-Initialize a new runtime instance.
-
-```http
-POST /vmm/spawn
-Content-Type: application/json
-```
-
-**Request Body:**
-```json
-{
-  "pid": "process-001",
-  "owner": "user-123",
-  "cuAddr": "cu-456",
-  "data": {},
-  "tags": ["test", "demo"],
-  "evn": {
-    "runtime": "test"
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "status": "ok"
-}
-```
-
-**Error Response:**
-```json
-{
-  "status": "error",
-  "msg": "runtime is not nil"
-}
-```
-
-#### 3. Apply Action
-Execute an action on the spawned runtime.
-
-```http
-POST /vmm/apply
-Content-Type: application/json
-```
-
-**Request Body:**
-```json
-{
-  "from": "target-1",
-  "meta": {
-    "action": "Ping",
-    "sequence": 7
-  },
-  "params": {
-    "Action": "Ping",
-    "Reference": "7"
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "result": "{\"data\": \"Pong\", \"messages\": [...]}"
-}
-```
-
-### Example Usage with cURL
-
-```bash
-# Health check
-curl -X POST http://localhost:8080/vmm/health
-
-# Spawn runtime
-curl -X POST http://localhost:8080/vmm/spawn \
-  -H "Content-Type: application/json" \
-  -d '{
-    "pid": "test-pid",
-    "owner": "test-owner",
-    "cuAddr": "test-cu"
-  }'
-
-# Apply action
-curl -X POST http://localhost:8080/vmm/apply \
-  -H "Content-Type: application/json" \
-  -d '{
-    "from": "test-target",
-    "meta": {"action": "Ping", "sequence": 1},
-    "params": {"Action": "Ping"}
-  }'
-```
-
----
-
-## 🛠️ Development
-
-### Project Structure
-
-```
-.
-├── ao/                      # AO runtime files (v2.0.1)
-│   ├── test/               # Test suites
-│   ├── handlers.md         # Handler documentation
-│   └── README.md           # AO specific docs
-├── common/                  # Shared utilities and logging
-├── runtime/                 # Runtime implementations
-│   ├── runtime.go          # Runtime interface
-│   ├── runtime_testrt/     # Test runtime implementation
-│   └── schema/             # Protocol schemas
-├── server/                  # HTTP server implementation
-│   ├── server.go           # Server setup and lifecycle
-│   ├── api.go              # API handlers
-│   └── api_test.go         # API tests
-├── utils/                   # Helper utilities
-├── Dockerfile.testrt       # Docker build configuration
-├── docker_build.sh         # Docker build script
-├── docker_run.sh           # Docker run script
-├── main.go                 # Application entry point
-├── go.mod                  # Go module definition
-└── readme.md               # This file
-```
-
-### Running Tests
+### Testing
 
 ```bash
 # Run all tests
@@ -235,96 +109,272 @@ go test -v ./...
 
 # Run tests with coverage
 go test -v -cover ./...
-
-# Run specific package tests
-go test -v ./server/...
 ```
 
-### Building
+## 📡 API Reference
 
+Base path: `/vmm`
+
+### POST `/vmm/health`
+
+Simple liveness endpoint.
+
+Request:
+```json
+{}
+```
+
+Response:
+```json
+{"status":"ok"}
+```
+
+### POST `/vmm/spawn`
+
+Initialize runtime instance (must be called before `/vmm/apply`).
+
+Request fields:
+- `Pid` (string): process id from caller
+- `Owner` (string): owner id
+- `CuAddr` (string): compute unit address
+- `Evn` (object): runtime env map
+- `Tags` (array): tags passed to runtime
+- `params` (object, optional): Openclaw setup params used at spawn time
+
+`params` supported on spawn (Openclaw):
+- `model` / `Model` / `modelName` / `ModelName`: initial model
+- `provider` / `Provider`: provider prefix helper for model composition
+- `botToken`, `defaultAccount`, `dmPolicy`, `allowFrom`: initial Telegram patch fields
+
+Example:
 ```bash
-# Build for current platform
-go build -o vmdocker-container
-
-# Build for Linux (Docker)
-GOOS=linux GOARCH=amd64 go build -o vmdocker-container-linux
+curl -sS -X POST http://127.0.0.1:8080/vmm/spawn \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "Pid":"pid-1",
+    "Owner":"owner-1",
+    "CuAddr":"cu-1",
+    "Evn":{},
+    "Tags":[],
+    "params":{"model":"kimi-coding/k2p5"}
+  }'
 ```
 
----
+### POST `/vmm/apply`
 
-## ⚙️ Configuration
+Run one runtime action.
 
-### Environment Variables
+Request fields:
+- `From` (string): message target fallback
+- `Meta.Action` (string): action name
+- `Meta.Sequence` (number): request id fallback
+- `Meta.Data` (string, optional): fallback command/model source
+- `Params` (object): action parameters
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `AO_PATH` | Path to AO runtime files | `./ao/2.0.1` |
-| `RUNTIME_TYPE` | Runtime type (test, etc.) | `test` |
-| `PORT` | HTTP server port | `8080` |
+Common `Params` fields:
+- `Action` / `action`: action override if `Meta.Action` is empty
+- `Reference` / `reference`: explicit request id
 
-### Example with Custom Config
+#### Supported Actions
 
+1. `Ping`
+2. `Query`
+3. `Execute`
+4. `Chat`
+5. `CreateSession`
+6. `CloseSession`
+7. `ConfigureModel` (alias: `SetModel`)
+8. `ConfigureTelegram` (aliases: `TelegramConfig`, `SetTelegram`)
+
+Action resolution notes:
+- Action name is case-insensitive.
+- If missing, defaults to `Query`.
+
+#### Action Parameters
+
+`Query` / `Execute` / `Chat`:
+- command text (first non-empty wins):
+  - `Params.command`, `Params.Command`
+  - `Params.prompt`, `Params.Prompt`
+  - `Params.input`, `Params.Input`
+  - `Params.data`, `Params.Data`
+  - fallback: `Meta.Data`
+- `Params.timeoutSeconds` / `Params.TimeoutSeconds` (int, optional)
+
+`CreateSession`:
+- no required apply params (session is created via gateway tool)
+
+`CloseSession`:
+- no required apply params (closes current runtime session)
+
+`ConfigureModel`:
+- model value (first non-empty wins):
+  - `Params.model`, `Params.Model`
+  - `Params.modelName`, `Params.ModelName`
+  - fallback: `Meta.Data`
+- optional provider composition:
+  - `Params.provider` / `Params.Provider`
+  - when both provider + model provided and model has no `/`, runtime sends `provider/model`
+
+`ConfigureTelegram`:
+- patch fields:
+  - `Params.botToken` (string)
+  - `Params.defaultAccount` (string)
+  - `Params.dmPolicy` (string)
+  - `Params.allowFrom` (string)
+- `allowFrom` supports comma-separated (`"@alice,+1555"`) or JSON array string (`"[\"@alice\",\"+1555\"]"`)
+
+#### Apply Examples
+
+`Execute`:
 ```bash
-# Set environment variables
-export AO_PATH=/custom/ao/path
-export PORT=9090
-
-# Run
-./vmdocker-container
+curl -sS -X POST http://127.0.0.1:8080/vmm/apply \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "From":"target-1",
+    "Meta":{"Action":"Execute","Sequence":1},
+    "Params":{"Action":"Execute","Command":"hello openclaw","Reference":"1","timeoutSeconds":"30"}
+  }'
 ```
 
----
+`Query`:
+```bash
+curl -sS -X POST http://127.0.0.1:8080/vmm/apply \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "From":"target-1",
+    "Meta":{"Action":"Query","Sequence":11},
+    "Params":{"Action":"Query","Prompt":"summarize latest status","Reference":"11"}
+  }'
+```
+
+`Chat`:
+```bash
+curl -sS -X POST http://127.0.0.1:8080/vmm/apply \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "From":"target-1",
+    "Meta":{"Action":"Chat","Sequence":2},
+    "Params":{"Action":"Chat","Command":"你好","Reference":"2"}
+  }'
+```
+
+`Ping`:
+```bash
+curl -sS -X POST http://127.0.0.1:8080/vmm/apply \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "From":"target-1",
+    "Meta":{"Action":"Ping","Sequence":12},
+    "Params":{"Action":"Ping","Reference":"12"}
+  }'
+```
+
+`CreateSession`:
+```bash
+curl -sS -X POST http://127.0.0.1:8080/vmm/apply \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "From":"target-1",
+    "Meta":{"Action":"CreateSession","Sequence":13},
+    "Params":{"Action":"CreateSession","Reference":"13"}
+  }'
+```
+
+`CloseSession`:
+```bash
+curl -sS -X POST http://127.0.0.1:8080/vmm/apply \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "From":"target-1",
+    "Meta":{"Action":"CloseSession","Sequence":14},
+    "Params":{"Action":"CloseSession","Reference":"14"}
+  }'
+```
+
+`ConfigureModel`:
+```bash
+curl -sS -X POST http://127.0.0.1:8080/vmm/apply \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "From":"target-1",
+    "Meta":{"Action":"ConfigureModel","Sequence":3},
+    "Params":{"Action":"ConfigureModel","model":"kimi-coding/k2p5","Reference":"3"}
+  }'
+```
+
+`ConfigureTelegram`:
+```bash
+curl -sS -X POST http://127.0.0.1:8080/vmm/apply \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "From":"target-1",
+    "Meta":{"Action":"ConfigureTelegram","Sequence":4},
+    "Params":{
+      "Action":"ConfigureTelegram",
+      "dmPolicy":"open",
+      "allowFrom":"*",
+      "Reference":"4"
+    }
+  }'
+```
+
+#### Apply Response Notes
+
+Success shape:
+```json
+{
+  "status":"ok",
+  "result":{
+    "Messages":[...],
+    "Output":{
+      "runtime":"openclaw",
+      "action":"Chat",
+      "requestId":"2",
+      "sessionId":"main",
+      "gatewayStatus":"200 OK",
+      "statusCode":200,
+      "gateway":{},
+      "reply":"... (Chat only)"
+    }
+  }
+}
+```
+
+For `Chat`, runtime additionally writes reply text to:
+- `result.Output.reply`
+
+
+## 🏗️ Project Structure
+
+```
+.
+├── common/             # Shared utilities
+├── runtime/            # Runtime implementations
+│   ├── openclaw/        # Openclaw runtime
+│   └── testrt/          # In-memory test runtime
+├── server/             # HTTP server implementation
+├── utils/              # Helper utilities
+├── Dockerfile          # Docker build file
+├── docker_build.sh     # Build script
+├── docker_run.sh       # Run script
+└── main.go            # Application entry point
+```
 
 ## 🤝 Contributing
 
-We welcome contributions! Here's how to get started:
-
-1. **Fork** the repository
-2. **Create** your feature branch:
-   ```bash
-   git checkout -b feature/amazing-feature
-   ```
-3. **Make** your changes
-4. **Test** your changes:
-   ```bash
-   go test -v ./...
-   ```
-5. **Commit** with clear messages:
-   ```bash
-   git commit -m "Add: amazing feature description"
-   ```
-6. **Push** to your branch:
-   ```bash
-   git push origin feature/amazing-feature
-   ```
-7. **Open** a Pull Request
-
-### Commit Message Convention
-
-- `Add:` - New features
-- `Fix:` - Bug fixes
-- `Docs:` - Documentation changes
-- `Refactor:` - Code refactoring
-- `Test:` - Test additions/changes
-
----
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## 📄 License
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
----
+## 🔗 Related Projects
 
-## 🆘 Support
-
-If you encounter any issues or have questions:
-
-1. Check the [HyMatrix Documentation](https://docs.hymatrix.com/)
-2. Open an issue on [GitHub](https://github.com/cryptowizard0/vmdocker_agent/issues)
-3. Join the community discussions
-
----
-
-<p align="center">
-  Built with ❤️ for the HyMatrix ecosystem
-</p>
+- [Hymx](https://github.com/cryptowizard0/hymx) - The main computation framework
+- [Vmdocker](https://github.com/cryptowizard0/vmdocker) - Container orchestration system
+- [AOS](https://github.com/cryptowizard0/aos) - Actor Oriented System
