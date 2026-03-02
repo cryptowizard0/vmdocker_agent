@@ -8,5 +8,5 @@ if [ -z "$1" ]; then
 fi
 
 docker build --progress=plain \
-    -f Dockerfile.testrt \
-    -t chriswebber/docker-testrt:"$1" .
+    -f Dockerfile \
+    -t chriswebber/docker-openclaw:"$1" .

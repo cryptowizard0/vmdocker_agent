@@ -1,4 +1,4 @@
-package runtimetestrt
+package testrt
 
 import (
 	"testing"

@@ -1,4 +1,4 @@
-package runtimetestrt
+package testrt
 
 import (
 	"strconv"
@@ -13,7 +13,7 @@ const (
 	TestRuntimeActionEcho = "Echo"
 )
 
-var log = common.NewLog("runtime_testrt")
+var log = common.NewLog("testrt")
 
 type RuntimeTest struct{}
 

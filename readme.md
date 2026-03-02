@@ -1,7 +1,7 @@
 # VMDocker Container
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/go-1.19+-blue.svg)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/go-1.24+-blue.svg)](https://golang.org/)
 [![Docker](https://img.shields.io/badge/docker-supported-blue.svg)](https://www.docker.com/)
 
 VMDocker Container is a Docker-based runtime environment designed to execute computational tasks for `HyMatrix`, working seamlessly with `Vmdocker` for distributed computing scenarios.
@@ -13,7 +13,7 @@ More about HyMatrix & Vmdocker:
 
 ## 🚀 Features
 
-- **Test Runtime Only**: Only in-memory test runtime is kept for protocol and message-path verification
+- **Runtime Modes**: Supports `openclaw` and in-memory `test` runtimes via `RUNTIME_TYPE`
 - **Docker Integration**: Containerized deployment for consistency
 - **RESTful API**: `/vmm/health`, `/vmm/spawn`, `/vmm/apply`
 
@@ -22,12 +22,12 @@ More about HyMatrix & Vmdocker:
 ### Prerequisites
 
 - Docker installed and running
-- Go 1.19+ (for local development)
+- Go 1.24+ (for local development)
 
 ### Build Docker Image
 
 ```bash
-# Build test runtime image
+# Build image
 ./docker_build.sh <VERSION>
 ```
 
@@ -79,13 +79,13 @@ go test -v -cover ./...
 
 ```
 .
-├── ao/                 # AO runtime files
 ├── common/             # Shared utilities
-├── runtime/            # Runtime implementations (test runtime only)
-│   └── runtime_testrt/ # In-memory test runtime
+├── runtime/            # Runtime implementations
+│   ├── openclaw/        # Openclaw runtime
+│   └── testrt/          # In-memory test runtime
 ├── server/             # HTTP server implementation
 ├── utils/              # Helper utilities
-├── Dockerfile.testrt   # Docker build file
+├── Dockerfile          # Docker build file
 ├── docker_build.sh     # Build script
 ├── docker_run.sh       # Run script
 └── main.go            # Application entry point

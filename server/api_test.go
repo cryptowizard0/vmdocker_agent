@@ -150,6 +150,84 @@ func TestSpawnAndApply(t *testing.T) {
 	}
 }
 
+func TestSpawnAndApplyOpenclaw(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "data": "pong"})
+		case "/v1/tools/invoke":
+			var payload map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok",
+				"data":   "handled:" + payload["action"],
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	t.Setenv("RUNTIME_TYPE", "openclaw")
+	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
+	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
+
+	s := setupTestServer(t)
+
+	spawnReq := vmdockerSchema.SpawnRequest{
+		Pid:    "pid-openclaw",
+		Owner:  "owner-1",
+		CuAddr: "cu-1",
+		Data:   []byte{},
+		Tags:   nil,
+		Evn:    vmmSchema.Env{},
+	}
+	w := performJSONRequest(t, s, http.MethodPost, "/vmm/spawn", spawnReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected spawn status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	applyReq := vmdockerSchema.ApplyRequest{
+		From: "target-oc-1",
+		Meta: vmmSchema.Meta{
+			Action:   "Execute",
+			Sequence: 12,
+		},
+		Params: map[string]string{
+			"Reference": "12",
+		},
+	}
+	w = performJSONRequest(t, s, http.MethodPost, "/vmm/apply", applyReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected apply status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var res struct {
+		Status string `json:"status"`
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal apply response failed: %v", err)
+	}
+	if res.Status != "ok" {
+		t.Fatalf("expected status ok, got %q", res.Status)
+	}
+
+	var out vmmSchema.Result
+	if err := json.Unmarshal([]byte(res.Result), &out); err != nil {
+		t.Fatalf("unmarshal result payload failed: %v", err)
+	}
+	if out.Data != "handled:Execute" {
+		t.Fatalf("expected result data handled:Execute, got %q", out.Data)
+	}
+	if len(out.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(out.Messages))
+	}
+	if out.Messages[0].Target != "target-oc-1" {
+		t.Fatalf("expected message target target-oc-1, got %q", out.Messages[0].Target)
+	}
+}
+
 func TestSpawnTwice(t *testing.T) {
 	t.Setenv("RUNTIME_TYPE", "test")
 	s := setupTestServer(t)
