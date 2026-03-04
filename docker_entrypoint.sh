@@ -16,6 +16,7 @@ else
 fi
 RUNTIME_CONFIG_PATH="${STATE_DIR}/openclaw.json"
 GATEWAY_READY_WAIT_SECONDS="${OPENCLAW_GATEWAY_READY_WAIT_SECONDS:-60}"
+GATEWAY_MODE="${OPENCLAW_GATEWAY_MODE:-local}"
 
 health_probe() {
     node -e '
@@ -56,7 +57,34 @@ ensure_runtime_gateway_config() {
 EOF
 }
 
+ensure_state_dir_permissions() {
+    mkdir -p "${STATE_DIR}"
+    chmod 700 "${STATE_DIR}" 2>/dev/null || true
+}
+
+ensure_state_layout() {
+    # Pre-create critical runtime state paths to avoid session-store bootstrap issues.
+    mkdir -p "${STATE_DIR}/agents/main/sessions" "${STATE_DIR}/agents/main/agent"
+    chmod 700 "${STATE_DIR}/agents" "${STATE_DIR}/agents/main" "${STATE_DIR}/agents/main/sessions" 2>/dev/null || true
+    if [ ! -f "${STATE_DIR}/agents/main/sessions/sessions.json" ]; then
+        printf "{}\n" >"${STATE_DIR}/agents/main/sessions/sessions.json"
+    fi
+}
+
+ensure_gateway_mode() {
+    if [ -z "${GATEWAY_MODE}" ]; then
+        return
+    fi
+
+    if ! openclaw config set gateway.mode "${GATEWAY_MODE}" >/tmp/openclaw-config.log 2>&1; then
+        echo "warning: failed to set gateway.mode=${GATEWAY_MODE}; see /tmp/openclaw-config.log"
+    fi
+}
+
 if [ "${RUNTIME_TYPE:-openclaw}" = "openclaw" ]; then
+    ensure_state_dir_permissions
+    ensure_state_layout
+    ensure_gateway_mode
     ensure_runtime_gateway_config
     echo "starting openclaw gateway on ${BIND}:${PORT}"
     set -- openclaw gateway --bind "${BIND}" --port "${PORT}" --allow-unconfigured

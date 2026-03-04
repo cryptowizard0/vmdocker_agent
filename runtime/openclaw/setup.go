@@ -215,6 +215,100 @@ func (r *Openclaw) ConfigureTelegram(ctx context.Context, params map[string]stri
 	return resp, nil
 }
 
+func (r *Openclaw) Configure(ctx context.Context, meta vmmSchema.Meta, params map[string]string) (*schema.GatewayResponse, error) {
+	raw := extractConfigRaw(meta, params)
+	if raw == "" {
+		return nil, fmt.Errorf("config raw is empty")
+	}
+
+	configAction := extractConfigAction(params)
+	args := map[string]interface{}{
+		"action": configAction,
+		"raw":    raw,
+	}
+
+	baseHash := extractConfigBaseHash(params)
+	if baseHash == "" && configAction == "config.patch" {
+		hash, err := r.fetchCurrentConfigHash(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read current config hash failed: %w", err)
+		}
+		if hash != "" {
+			baseHash = hash
+		}
+	}
+	if baseHash != "" {
+		args["baseHash"] = baseHash
+	}
+
+	payload := newToolInvokeRequest(resolveGatewayTool(), args, "")
+	resp, err := r.client.Call(ctx, ActionConfig, payload)
+	if err != nil {
+		return nil, fmt.Errorf("configure failed: %w", err)
+	}
+	return resp, nil
+}
+
+func (r *Openclaw) ApprovePairing(ctx context.Context, meta vmmSchema.Meta, params map[string]string) (*schema.GatewayResponse, error) {
+	channel := extractPairingChannel(params)
+	code := extractPairingCode(meta, params)
+	if code == "" {
+		return nil, fmt.Errorf("pairing code is empty")
+	}
+
+	// Prefer CLI command because some OpenClaw versions do not expose pairing.approve via gateway action.
+	if out, err := runPairingApprove(ctx, channel, code); err == nil {
+		output := strings.TrimSpace(out)
+		return &schema.GatewayResponse{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Data:       output,
+			Body:       output,
+			JSON: map[string]interface{}{
+				"ok":     true,
+				"result": output,
+			},
+		}, nil
+	}
+
+	args := map[string]interface{}{
+		"action":  "pairing.approve",
+		"channel": channel,
+		"code":    code,
+	}
+	payload := newToolInvokeRequest(resolveGatewayTool(), args, "")
+	resp, err := r.client.Call(ctx, ActionApprovePairing, payload)
+	if err != nil {
+		return nil, fmt.Errorf("approve pairing failed: %w", err)
+	}
+	return resp, nil
+}
+
+func runPairingApprove(ctx context.Context, channel, code string) (string, error) {
+	// Use a shell entrypoint to match environments where openclaw is resolved via shell init/profile.
+	cmd := exec.CommandContext(ctx, "bash", "-lc", "openclaw pairing approve \"$1\" \"$2\"", "_", channel, code)
+	output, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(output))
+	if err != nil {
+		if text == "" {
+			text = err.Error()
+		}
+		return "", fmt.Errorf("openclaw pairing approve failed: %s", text)
+	}
+	return text, nil
+}
+
+func (r *Openclaw) fetchCurrentConfigHash(ctx context.Context) (string, error) {
+	payload := newToolInvokeRequest(resolveGatewayTool(), map[string]interface{}{
+		"action": "config.get",
+	}, "")
+	resp, err := r.client.Call(ctx, ActionConfig, payload)
+	if err != nil {
+		return "", err
+	}
+	return extractConfigHash(resp.JSON), nil
+}
+
 func (r *Openclaw) CreateSession(ctx context.Context) (*schema.GatewayResponse, error) {
 	tool := getEnvOrDefault("OPENCLAW_TOOL_CREATE_SESSION", DefaultToolCreateSession)
 	title := strings.TrimSpace(os.Getenv("OPENCLAW_SESSION_TITLE"))

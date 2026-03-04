@@ -145,6 +145,61 @@ func buildTelegramConfigPatch(params map[string]string) map[string]interface{} {
 	}
 }
 
+func extractConfigRaw(meta vmmSchema.Meta, params map[string]string) string {
+	for _, key := range []string{"raw", "Raw", "patch", "Patch", "config", "Config"} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	if value := strings.TrimSpace(meta.Data); value != "" {
+		return value
+	}
+	return ""
+}
+
+func extractConfigAction(params map[string]string) string {
+	for _, key := range []string{"configAction", "ConfigAction", "method", "Method"} {
+		value := strings.TrimSpace(strings.ToLower(params[key]))
+		switch value {
+		case "config.patch", "patch":
+			return "config.patch"
+		case "config.apply", "apply":
+			return "config.apply"
+		}
+	}
+	return "config.patch"
+}
+
+func extractConfigBaseHash(params map[string]string) string {
+	for _, key := range []string{"baseHash", "BaseHash", "hash", "Hash"} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func extractPairingChannel(params map[string]string) string {
+	for _, key := range []string{"channel", "Channel"} {
+		if value := strings.TrimSpace(strings.ToLower(params[key])); value != "" {
+			return value
+		}
+	}
+	return "telegram"
+}
+
+func extractPairingCode(meta vmmSchema.Meta, params map[string]string) string {
+	for _, key := range []string{"code", "Code", "pairingCode", "PairingCode"} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	if value := strings.TrimSpace(meta.Data); value != "" {
+		return value
+	}
+	return ""
+}
+
 func parseStringList(input string) []string {
 	input = strings.TrimSpace(input)
 	if input == "" {
@@ -267,6 +322,51 @@ func findSessionIDRecursive(v interface{}) string {
 	case []interface{}:
 		for _, value := range vv {
 			if out := findSessionIDRecursive(value); out != "" {
+				return out
+			}
+		}
+	}
+	return ""
+}
+
+func extractConfigHash(body map[string]interface{}) string {
+	if len(body) == 0 {
+		return ""
+	}
+	for _, path := range [][]string{
+		{"payload", "hash"},
+		{"data", "payload", "hash"},
+		{"result", "payload", "hash"},
+		{"hash"},
+		{"data", "hash"},
+		{"result", "hash"},
+	} {
+		if value := lookupStringPath(body, path...); value != "" {
+			return value
+		}
+	}
+	return findConfigHashRecursive(body)
+}
+
+func findConfigHashRecursive(v interface{}) string {
+	switch vv := v.(type) {
+	case map[string]interface{}:
+		for key, value := range vv {
+			if normalizeKey(key) != "hash" {
+				continue
+			}
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				return strings.TrimSpace(text)
+			}
+		}
+		for _, value := range vv {
+			if out := findConfigHashRecursive(value); out != "" {
+				return out
+			}
+		}
+	case []interface{}:
+		for _, value := range vv {
+			if out := findConfigHashRecursive(value); out != "" {
 				return out
 			}
 		}

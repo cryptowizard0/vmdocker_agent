@@ -7,6 +7,7 @@
     }
   },
   "gateway": {
+    "mode": "local",
     "tools": {
       "allow": [
         "sessions_create",
@@ -20,6 +21,15 @@
   "tools": {
     "sessions": {
       "visibility": "all"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "pairing",
+      "groupPolicy": "open",
+      "defaultAccount": "main",
+      "streaming": "off"
     }
   }
 }
