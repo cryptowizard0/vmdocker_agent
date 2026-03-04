@@ -77,6 +77,48 @@ func extractModelName(meta vmmSchema.Meta, params map[string]string) string {
 	return ""
 }
 
+func extractProviderName(meta vmmSchema.Meta, params map[string]string) string {
+	provider := strings.TrimSpace(params["provider"])
+	if provider == "" {
+		provider = strings.TrimSpace(params["Provider"])
+	}
+	if provider != "" {
+		return strings.ToLower(provider)
+	}
+	model := extractModelName(meta, params)
+	if idx := strings.Index(model, "/"); idx > 0 {
+		return strings.ToLower(strings.TrimSpace(model[:idx]))
+	}
+	return ""
+}
+
+func extractModelAPIKey(params map[string]string) string {
+	for _, key := range []string{
+		"apiKey", "ApiKey", "APIKey",
+		"modelApiKey", "ModelApiKey",
+		"KIMI_API_KEY", "KIMICODE_API_KEY", "MOONSHOT_API_KEY",
+		"OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+		"GEMINI_API_KEY", "GOOGLE_API_KEY",
+	} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func extractAuthProfileID(provider string, params map[string]string) string {
+	for _, key := range []string{"authProfileId", "AuthProfileId", "profileId", "ProfileId"} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	if provider == "" {
+		return ""
+	}
+	return provider + ":default"
+}
+
 func buildTelegramConfigPatch(params map[string]string) map[string]interface{} {
 	tg := map[string]interface{}{}
 	if v := strings.TrimSpace(params["botToken"]); v != "" {

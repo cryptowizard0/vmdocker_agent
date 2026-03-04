@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE_NAME="${IMAGE_NAME:-chriswebber/docker-openclaw:latest}"
+IMAGE_NAME="${IMAGE_NAME:-chriswebber/docker-openclaw:v0.0.1}"
 CONTAINER_NAME="${CONTAINER_NAME:-hymatrix-openclaw-test}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8080}"
@@ -9,19 +9,9 @@ RUNTIME_TYPE="openclaw"
 OPENCLAW_GATEWAY_URL="${OPENCLAW_GATEWAY_URL:-http://127.0.0.1:18789}"
 OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-openclaw-test-token}"
 WAIT_SECONDS="${WAIT_SECONDS:-90}"
-OPENCLAW_TIMEOUT_MS="${OPENCLAW_TIMEOUT_MS:-120000}"
 CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-false}"
 OPENCLAW_GATEWAY_READY_WAIT_SECONDS="${OPENCLAW_GATEWAY_READY_WAIT_SECONDS:-90}"
 OPENCLAW_TEST_MODEL="${OPENCLAW_TEST_MODEL:-kimi-coding/k2p5}"
-OPENCLAW_TELEGRAM_DM_POLICY="${OPENCLAW_TELEGRAM_DM_POLICY:-}"
-OPENCLAW_TELEGRAM_ALLOW_FROM="${OPENCLAW_TELEGRAM_ALLOW_FROM:-}"
-OPENCLAW_TELEGRAM_DEFAULT_ACCOUNT="${OPENCLAW_TELEGRAM_DEFAULT_ACCOUNT:-}"
-OPENCLAW_TELEGRAM_BOT_TOKEN="${OPENCLAW_TELEGRAM_BOT_TOKEN:-}"
-export OPENCLAW_TEST_MODEL
-export OPENCLAW_TELEGRAM_DM_POLICY
-export OPENCLAW_TELEGRAM_ALLOW_FROM
-export OPENCLAW_TELEGRAM_DEFAULT_ACCOUNT
-export OPENCLAW_TELEGRAM_BOT_TOKEN
 
 STARTED_BY_SCRIPT="false"
 CONFIG_FILE=""
@@ -54,49 +44,33 @@ require_non_empty_env() {
 
 check_model_credentials() {
   local model="$1"
-  local key
-  key="$(resolve_model_apikey "${model}")"
-  if [[ -z "${key}" ]]; then
-    echo "[ERROR] missing model api key for model '${model}'"
-    echo "[HINT] set OPENCLAW_MODEL_API_KEY, or provider key in .env (OPENAI_API_KEY/ANTHROPIC_API_KEY/KIMICODE_API_KEY/KIMI_API_KEY/MOONSHOT_API_KEY/GEMINI_API_KEY/GOOGLE_API_KEY)"
-    return 1
-  fi
-}
-
-resolve_model_apikey() {
-  local model="$1"
   local provider="${model%%/*}"
-
-  if [[ -n "${OPENCLAW_MODEL_API_KEY:-}" ]]; then
-    printf '%s\n' "${OPENCLAW_MODEL_API_KEY}"
+  if [[ "$provider" == "$model" ]]; then
+    echo "[WARN] model '${model}' has no provider prefix; skip provider key precheck"
     return 0
   fi
 
   case "${provider}" in
     openai)
-      printf '%s\n' "${OPENAI_API_KEY:-}"
+      require_non_empty_env "OPENAI_API_KEY"
       ;;
     anthropic)
-      printf '%s\n' "${ANTHROPIC_API_KEY:-}"
+      require_non_empty_env "ANTHROPIC_API_KEY"
       ;;
     kimi-code|kimi-coding)
-      if [[ -n "${KIMICODE_API_KEY:-}" ]]; then
-        printf '%s\n' "${KIMICODE_API_KEY}"
-      elif [[ -n "${KIMI_API_KEY:-}" ]]; then
-        printf '%s\n' "${KIMI_API_KEY}"
-      else
-        printf '%s\n' "${MOONSHOT_API_KEY:-}"
+      if [[ -z "${KIMI_API_KEY:-}" && -z "${KIMICODE_API_KEY:-}" && -z "${MOONSHOT_API_KEY:-}" ]]; then
+        echo "[ERROR] missing required env: KIMICODE_API_KEY or KIMI_API_KEY or MOONSHOT_API_KEY"
+        return 1
       fi
       ;;
     google|gemini)
-      if [[ -n "${GEMINI_API_KEY:-}" ]]; then
-        printf '%s\n' "${GEMINI_API_KEY}"
-      else
-        printf '%s\n' "${GOOGLE_API_KEY:-}"
+      if [[ -z "${GEMINI_API_KEY:-}" && -z "${GOOGLE_API_KEY:-}" ]]; then
+        echo "[ERROR] missing required env: GEMINI_API_KEY or GOOGLE_API_KEY"
+        return 1
       fi
       ;;
     *)
-      printf '%s\n' ""
+      echo "[WARN] unknown model provider '${provider}'; skip provider key precheck"
       ;;
   esac
 }
@@ -218,10 +192,8 @@ fi
 
 echo "[INFO] testing model: ${OPENCLAW_TEST_MODEL}"
 check_model_credentials "${OPENCLAW_TEST_MODEL}"
-MODEL_API_KEY="$(resolve_model_apikey "${OPENCLAW_TEST_MODEL}")"
-export MODEL_API_KEY
 
-CONFIG_FILE="$(mktemp "${PWD}/.openclaw-test-config.XXXXXX.json")"
+CONFIG_FILE="$(mktemp /tmp/openclaw-test-config.XXXXXX)"
 cat >"${CONFIG_FILE}" <<EOF
 {
   "agents": {
@@ -234,7 +206,7 @@ cat >"${CONFIG_FILE}" <<EOF
   },
   "gateway": {
     "tools": {
-      "allow": ["sessions_create", "session_status", "sessions_send", "sessions_delete", "gateway"]
+      "allow": ["sessions_send", "gateway"]
     }
   },
   "tools": {
@@ -245,12 +217,25 @@ cat >"${CONFIG_FILE}" <<EOF
 }
 EOF
 
+if [[ -z "${KIMICODE_API_KEY:-}" && -n "${KIMI_API_KEY:-}" ]]; then
+  KIMICODE_API_KEY="${KIMI_API_KEY}"
+fi
+if [[ -z "${KIMI_API_KEY:-}" && -n "${KIMICODE_API_KEY:-}" ]]; then
+  KIMI_API_KEY="${KIMICODE_API_KEY}"
+fi
+if [[ -z "${MOONSHOT_API_KEY:-}" && -n "${KIMI_API_KEY:-}" ]]; then
+  MOONSHOT_API_KEY="${KIMI_API_KEY}"
+fi
+
+if [[ -z "${KIMI_API_KEY:-}" && -n "${MOONSHOT_API_KEY:-}" ]]; then
+  KIMI_API_KEY="${MOONSHOT_API_KEY}"
+fi
+
 docker run --name "${CONTAINER_NAME}" -d \
   -p "${PORT}:8080" \
   -v "${CONFIG_FILE}:/tmp/openclaw-test-config.json:ro" \
   -e RUNTIME_TYPE="${RUNTIME_TYPE}" \
   -e OPENCLAW_GATEWAY_URL="${OPENCLAW_GATEWAY_URL}" \
-  -e OPENCLAW_TIMEOUT_MS="${OPENCLAW_TIMEOUT_MS}" \
   -e OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN}" \
   -e OPENCLAW_GATEWAY_READY_WAIT_SECONDS="${OPENCLAW_GATEWAY_READY_WAIT_SECONDS}" \
   -e OPENCLAW_CONFIG_PATH=/tmp/openclaw-test-config.json \
@@ -258,6 +243,13 @@ docker run --name "${CONTAINER_NAME}" -d \
   -e OPENCLAW_GATEWAY_AUTH_TOKEN="${OPENCLAW_GATEWAY_TOKEN}" \
   -e OPENCLAW_HTTP_TOOLS_INVOKE=true \
   -e OPENCLAW_HTTP_TOOLS_INVOKE_DENY= \
+  -e OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
+  -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+  -e KIMI_API_KEY="${KIMI_API_KEY:-}" \
+  -e KIMICODE_API_KEY="${KIMICODE_API_KEY:-}" \
+  -e MOONSHOT_API_KEY="${MOONSHOT_API_KEY:-}" \
+  -e GEMINI_API_KEY="${GEMINI_API_KEY:-}" \
+  -e GOOGLE_API_KEY="${GOOGLE_API_KEY:-}" \
   "${IMAGE_NAME}" >/dev/null
 STARTED_BY_SCRIPT="true"
 
@@ -266,20 +258,9 @@ BASE_URL="http://${HOST}:${PORT}/vmm"
 echo "[INFO] waiting for health endpoint: ${BASE_URL}/health"
 ready="false"
 for _ in $(seq 1 "${WAIT_SECONDS}"); do
-  if curl -fsS -X POST "${BASE_URL}/health" -H 'Content-Type: application/json' -d '{}' >/tmp/vmdocker_health_resp.json 2>/dev/null; then
-    if python - /tmp/vmdocker_health_resp.json <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], "r", encoding="utf-8") as f:
-    data = json.load(f)
-if data.get("status") != "ok":
-    raise SystemExit(1)
-PY
-    then
-      ready="true"
-      break
-    fi
+  if curl -sS -X POST "${BASE_URL}/health" -H 'Content-Type: application/json' -d '{}' >/tmp/vmdocker_health_resp.json 2>/dev/null; then
+    ready="true"
+    break
   fi
   sleep 1
 done
@@ -294,59 +275,46 @@ echo "[OK] health response:"
 cat /tmp/vmdocker_health_resp.json
 assert_status_ok /tmp/vmdocker_health_resp.json "health"
 
-SPAWN_PAYLOAD_JSON="$(python - <<'PY'
-import json, os
-
-params = {
-    "model": os.environ.get("OPENCLAW_TEST_MODEL", "").strip(),
-    "apiKey": os.environ.get("MODEL_API_KEY", "").strip(),
-    "dmPolicy": os.environ.get("OPENCLAW_TELEGRAM_DM_POLICY", "").strip(),
-    "allowFrom": os.environ.get("OPENCLAW_TELEGRAM_ALLOW_FROM", "").strip(),
-}
-default_account = os.environ.get("OPENCLAW_TELEGRAM_DEFAULT_ACCOUNT", "").strip()
-if default_account:
-    params["defaultAccount"] = default_account
-bot_token = os.environ.get("OPENCLAW_TELEGRAM_BOT_TOKEN", "").strip()
-if bot_token:
-    params["botToken"] = bot_token
-
-tags = [{"name": k, "value": v} for k, v in params.items()]
-
-payload = {
-    "Pid": "pid-e2e-1",
-    "Owner": "owner-e2e",
-    "CuAddr": "cu-e2e",
-    "Evn": {},
-    "Tags": tags,
-}
-print(json.dumps(payload, ensure_ascii=False))
-PY
-)"
-
 echo "\n[INFO] spawn request"
 curl -sS -X POST "${BASE_URL}/spawn" \
   -H 'Content-Type: application/json' \
-  -d "${SPAWN_PAYLOAD_JSON}" \
+  -d '{"Pid":"pid-e2e-1","Owner":"owner-e2e","CuAddr":"cu-e2e","Evn":{},"Tags":[]}' \
   | tee /tmp/vmdocker_spawn_resp.json
 assert_status_ok /tmp/vmdocker_spawn_resp.json "spawn"
 
 echo "\n[INFO] apply Execute request"
 curl -sS -X POST "${BASE_URL}/apply" \
   -H 'Content-Type: application/json' \
-  -d '{"From":"target-e2e","Meta":{"Action":"Execute","Sequence":1},"Params":{"Action":"Execute","Command":"hello openclaw","Reference":"1","timeoutSeconds":"120"}}' \
+  -d '{"From":"target-e2e","Meta":{"Action":"Execute","Sequence":1},"Params":{"Action":"Execute","Command":"hello openclaw","Reference":"1"}}' \
   | tee /tmp/vmdocker_apply_resp.json
 assert_apply_action /tmp/vmdocker_apply_resp.json "Execute" "apply execute"
 
 echo "\n[INFO] apply Chat request"
 curl -sS -X POST "${BASE_URL}/apply" \
   -H 'Content-Type: application/json' \
-  -d '{"From":"target-e2e","Meta":{"Action":"Chat","Sequence":4},"Params":{"Action":"Chat","Command":"hello agent","Reference":"4","timeoutSeconds":"120"}}' \
+  -d '{"From":"target-e2e","Meta":{"Action":"Chat","Sequence":4},"Params":{"Action":"Chat","Command":"hello agent","Reference":"4"}}' \
   | tee /tmp/vmdocker_apply_chat_resp.json
 assert_apply_action /tmp/vmdocker_apply_chat_resp.json "Chat" "apply chat"
 assert_chat_reply /tmp/vmdocker_apply_chat_resp.json "apply chat"
+
+echo "\n[INFO] apply ConfigureModel request"
+curl -sS -X POST "${BASE_URL}/apply" \
+  -H 'Content-Type: application/json' \
+  -d "{\"From\":\"target-e2e\",\"Meta\":{\"Action\":\"ConfigureModel\",\"Sequence\":2},\"Params\":{\"Action\":\"ConfigureModel\",\"model\":\"${OPENCLAW_TEST_MODEL}\",\"Reference\":\"2\"}}" \
+  | tee /tmp/vmdocker_apply_configure_model_resp.json
+assert_apply_action /tmp/vmdocker_apply_configure_model_resp.json "ConfigureModel" "apply configure model"
+
+echo "\n[INFO] apply ConfigureTelegram request"
+curl -sS -X POST "${BASE_URL}/apply" \
+  -H 'Content-Type: application/json' \
+  -d '{"From":"target-e2e","Meta":{"Action":"ConfigureTelegram","Sequence":3},"Params":{"Action":"ConfigureTelegram","dmPolicy":"open","allowFrom":"*","Reference":"3"}}' \
+  | tee /tmp/vmdocker_apply_configure_telegram_resp.json
+assert_apply_action /tmp/vmdocker_apply_configure_telegram_resp.json "ConfigureTelegram" "apply configure telegram"
 
 echo "\n[DONE] responses saved to:"
 echo "  /tmp/vmdocker_health_resp.json"
 echo "  /tmp/vmdocker_spawn_resp.json"
 echo "  /tmp/vmdocker_apply_resp.json"
 echo "  /tmp/vmdocker_apply_chat_resp.json"
+echo "  /tmp/vmdocker_apply_configure_model_resp.json"
+echo "  /tmp/vmdocker_apply_configure_telegram_resp.json"

@@ -139,11 +139,13 @@ Request fields:
 - `CuAddr` (string): compute unit address
 - `Evn` (object): runtime env map
 - `Tags` (array): tags passed to runtime
-- `params` (object, optional): Openclaw setup params used at spawn time
 
-`params` supported on spawn (Openclaw):
+Openclaw setup keys are now read from `Tags` (`Tag.Name` => key, `Tag.Value` => value).
+
+Supported spawn tag keys (Openclaw):
 - `model` / `Model` / `modelName` / `ModelName`: initial model
 - `provider` / `Provider`: provider prefix helper for model composition
+- `apiKey` / `ApiKey` / `APIKey` / `modelApiKey` / `ModelApiKey`: provider API key; runtime writes it into OpenClaw auth store (`auth-profiles.json`) as `<provider>:default`
 - `botToken`, `defaultAccount`, `dmPolicy`, `allowFrom`: initial Telegram patch fields
 
 Example:
@@ -155,8 +157,10 @@ curl -sS -X POST http://127.0.0.1:8080/vmm/spawn \
     "Owner":"owner-1",
     "CuAddr":"cu-1",
     "Evn":{},
-    "Tags":[],
-    "params":{"model":"kimi-coding/k2p5"}
+    "Tags":[
+      {"name":"model","value":"kimi-coding/k2p5"},
+      {"name":"apiKey","value":"<YOUR_MODEL_API_KEY>"}
+    ]
   }'
 ```
 

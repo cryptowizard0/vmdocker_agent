@@ -1,0 +1,25 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "kimi-coding/k2p5"
+      }
+    }
+  },
+  "gateway": {
+    "tools": {
+      "allow": [
+        "sessions_create",
+        "session_status",
+        "sessions_send",
+        "sessions_delete",
+        "gateway"
+      ]
+    }
+  },
+  "tools": {
+    "sessions": {
+      "visibility": "all"
+    }
+  }
+}

@@ -13,11 +13,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type spawnRequestWithParams struct {
-	vmdockerSchema.SpawnRequest
-	Params map[string]string `json:"params"`
-}
-
 func (s *Server) runAPI(endpoint string) {
 	s.engine.Use(common.CORSMiddleware())
 	// api
@@ -104,7 +99,7 @@ func (s *Server) spawn(c *gin.Context) {
 		})
 		return
 	}
-	var req spawnRequestWithParams
+	var req vmdockerSchema.SpawnRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
@@ -112,12 +107,17 @@ func (s *Server) spawn(c *gin.Context) {
 		return
 	}
 
+	params := make(map[string]string)
+	for _, tag := range req.Tags {
+		params[tag.Name] = tag.Value
+	}
+
 	r, err := runtime.New(
 		req.Evn,
 		req.CuAddr,
 		s.aoPath,
 		req.Tags,
-		req.Params,
+		params,
 	)
 	if err != nil {
 		log.Error("create runtime failed", "err", err)

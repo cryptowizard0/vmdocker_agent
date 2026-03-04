@@ -13,12 +13,15 @@ USER root
 WORKDIR /app
 COPY --from=builder /app/main /app/main
 COPY docker_entrypoint.sh /usr/local/bin/docker_entrypoint.sh
+COPY openclaw.default.json /tmp/openclaw/openclaw.json
 RUN chmod +x /usr/local/bin/docker_entrypoint.sh
+RUN chmod 777 /tmp/openclaw && chmod 666 /tmp/openclaw/openclaw.json
 
 ENV RUNTIME_TYPE=openclaw
 ENV OPENCLAW_GATEWAY_PORT=18789
 ENV OPENCLAW_GATEWAY_BIND=loopback
 ENV OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
+ENV OPENCLAW_CONFIG_PATH=/tmp/openclaw/openclaw.json
 ENV OPENCLAW_TIMEOUT_MS=30000
 EXPOSE 8080 18789
 

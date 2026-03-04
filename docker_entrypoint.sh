@@ -3,7 +3,17 @@ set -eu
 
 PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
-STATE_DIR="${OPENCLAW_STATE_DIR:-${OPENCLAW_HOME:-${HOME:-/root}}/.openclaw}"
+# Resolve a writable state dir for non-root runtimes (some environments set HOME=/).
+if [ -n "${OPENCLAW_STATE_DIR:-}" ]; then
+    STATE_DIR="${OPENCLAW_STATE_DIR}"
+else
+    BASE_HOME="${OPENCLAW_HOME:-${HOME:-}}"
+    if [ -z "${BASE_HOME}" ] || [ "${BASE_HOME}" = "/" ]; then
+        STATE_DIR="/tmp/.openclaw"
+    else
+        STATE_DIR="${BASE_HOME}/.openclaw"
+    fi
+fi
 RUNTIME_CONFIG_PATH="${STATE_DIR}/openclaw.json"
 GATEWAY_READY_WAIT_SECONDS="${OPENCLAW_GATEWAY_READY_WAIT_SECONDS:-60}"
 
