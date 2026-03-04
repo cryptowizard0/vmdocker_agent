@@ -217,3 +217,171 @@ func TestNewAndApply(t *testing.T) {
 		t.Fatalf("expected 2 allowFrom entries, got %d", len(arr))
 	}
 }
+
+func TestApplyConfigAutoBaseHash(t *testing.T) {
+	createCalled := false
+	configGetCalled := false
+	configPatchCalled := false
+	seenPatchRaw := ""
+	seenBaseHash := ""
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "data": "pong"})
+		case "/tools/invoke":
+			var req schema.ToolInvokeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode invoke request failed: %v", err)
+			}
+
+			switch req.Tool {
+			case DefaultToolCreateSession:
+				createCalled = true
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"status": "ok",
+					"data":   map[string]interface{}{"sessionId": "sess-config-1"},
+				})
+			case DefaultToolGateway:
+				action, _ := req.Args["action"].(string)
+				switch action {
+				case "config.get":
+					configGetCalled = true
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"status": "ok",
+						"payload": map[string]interface{}{
+							"hash": "cfg-hash-1",
+						},
+					})
+				case "config.patch":
+					configPatchCalled = true
+					seenPatchRaw, _ = req.Args["raw"].(string)
+					seenBaseHash, _ = req.Args["baseHash"].(string)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"status": "ok",
+						"data":   "config-updated",
+					})
+				default:
+					http.Error(w, "unsupported gateway action", http.StatusBadRequest)
+				}
+			default:
+				http.Error(w, "unsupported tool", http.StatusBadRequest)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
+	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
+
+	rt, err := New()
+	if err != nil {
+		t.Fatalf("new openclaw runtime failed: %v", err)
+	}
+	if !createCalled {
+		t.Fatalf("expected sessions_create to be called")
+	}
+
+	raw := "{\"channels\":{\"telegram\":{\"dmPolicy\":\"pairing\"}}}"
+	res, err := rt.Apply("target-1", vmmSchema.Meta{Action: "Config", Sequence: 101}, map[string]string{
+		"raw":       raw,
+		"Reference": "101",
+	})
+	if err != nil {
+		t.Fatalf("apply config failed: %v", err)
+	}
+	if out, _ := res.Output.(string); out != "config-updated" {
+		t.Fatalf("expected output config-updated, got %q", out)
+	}
+	if !configGetCalled {
+		t.Fatalf("expected gateway config.get to be called")
+	}
+	if !configPatchCalled {
+		t.Fatalf("expected gateway config.patch to be called")
+	}
+	if seenPatchRaw != raw {
+		t.Fatalf("expected raw patch %q, got %q", raw, seenPatchRaw)
+	}
+	if seenBaseHash != "cfg-hash-1" {
+		t.Fatalf("expected baseHash cfg-hash-1, got %q", seenBaseHash)
+	}
+}
+
+func TestApplyApprovePairing(t *testing.T) {
+	createCalled := false
+	approveCalled := false
+	seenChannel := ""
+	seenCode := ""
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "data": "pong"})
+		case "/tools/invoke":
+			var req schema.ToolInvokeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode invoke request failed: %v", err)
+			}
+
+			switch req.Tool {
+			case DefaultToolCreateSession:
+				createCalled = true
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"status": "ok",
+					"data":   map[string]interface{}{"sessionId": "sess-pair-1"},
+				})
+			case DefaultToolGateway:
+				action, _ := req.Args["action"].(string)
+				if action != "pairing.approve" {
+					http.Error(w, "unsupported gateway action", http.StatusBadRequest)
+					return
+				}
+				approveCalled = true
+				seenChannel, _ = req.Args["channel"].(string)
+				seenCode, _ = req.Args["code"].(string)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"ok":   true,
+					"data": "approved",
+				})
+			default:
+				http.Error(w, "unsupported tool", http.StatusBadRequest)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
+	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
+
+	rt, err := New()
+	if err != nil {
+		t.Fatalf("new openclaw runtime failed: %v", err)
+	}
+	if !createCalled {
+		t.Fatalf("expected sessions_create to be called")
+	}
+
+	res, err := rt.Apply("target-1", vmmSchema.Meta{Action: "ApproveTelegramPairing", Sequence: 301}, map[string]string{
+		"Code":      "FLCSBGVH",
+		"Reference": "301",
+	})
+	if err != nil {
+		t.Fatalf("apply approve pairing failed: %v", err)
+	}
+	if res.Output == nil {
+		t.Fatalf("expected non-empty output")
+	}
+	if !approveCalled {
+		t.Fatalf("expected pairing.approve to be called")
+	}
+	if seenChannel != "telegram" {
+		t.Fatalf("expected channel telegram, got %q", seenChannel)
+	}
+	if seenCode != "FLCSBGVH" {
+		t.Fatalf("expected code FLCSBGVH, got %q", seenCode)
+	}
+}

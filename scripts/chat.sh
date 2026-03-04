@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-BASE_URL="${BASE_URL:-http://127.0.0.1:8080/vmm}"
+BASE_URL="${BASE_URL:-http://127.0.0.1:10003/vmm}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-20}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-1}"
 

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -254,7 +256,7 @@ func TestSpawnAndApplyOpenclaw(t *testing.T) {
 func TestSpawnOpenclawSetupOnSpawn(t *testing.T) {
 	createCalled := false
 	setModelCalled := false
-	gatewayPatchCalled := false
+	telegramPatchCalled := false
 
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -278,15 +280,14 @@ func TestSpawnOpenclawSetupOnSpawn(t *testing.T) {
 				if req.Args["sessionKey"] != "sess-setup-1" {
 					t.Fatalf("expected args.sessionKey sess-setup-1, got %v", req.Args["sessionKey"])
 				}
-				if req.Args["model"] != "gpt-4o" {
-					t.Fatalf("expected model gpt-4o, got %v", req.Args["model"])
+				if req.Args["model"] != "kimi-coding/k2p5" {
+					t.Fatalf("expected model kimi-coding/k2p5, got %v", req.Args["model"])
 				}
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
 					"status": "ok",
 					"data":   "model-updated",
 				})
 			case "gateway":
-				gatewayPatchCalled = true
 				act, _ := req.Args["action"].(string)
 				if act != "config.patch" {
 					t.Fatalf("expected action config.patch, got %q", act)
@@ -299,10 +300,12 @@ func TestSpawnOpenclawSetupOnSpawn(t *testing.T) {
 				if err := json.Unmarshal([]byte(raw), &patch); err != nil {
 					t.Fatalf("decode raw patch failed: %v", err)
 				}
-				channels, _ := patch["channels"].(map[string]interface{})
-				tg, _ := channels["telegram"].(map[string]interface{})
-				if tg["botToken"] != "tg-token-setup-1" {
-					t.Fatalf("expected botToken tg-token-setup-1, got %v", tg["botToken"])
+				if channels, ok := patch["channels"].(map[string]interface{}); ok {
+					tg, _ := channels["telegram"].(map[string]interface{})
+					if tg["botToken"] != "tg-token-setup-1" {
+						t.Fatalf("expected botToken tg-token-setup-1, got %v", tg["botToken"])
+					}
+					telegramPatchCalled = true
 				}
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
 					"status": "ok",
@@ -320,6 +323,9 @@ func TestSpawnOpenclawSetupOnSpawn(t *testing.T) {
 	t.Setenv("RUNTIME_TYPE", "openclaw")
 	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
 	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
+	t.Setenv("OPENCLAW_SECRETS_RELOAD", "false")
+	authStorePath := filepath.Join(t.TempDir(), "auth-profiles.json")
+	t.Setenv("OPENCLAW_AUTH_STORE_PATH", authStorePath)
 
 	s := setupTestServer(t)
 
@@ -328,12 +334,12 @@ func TestSpawnOpenclawSetupOnSpawn(t *testing.T) {
 		"owner":   "owner-1",
 		"cu_addr": "cu-1",
 		"data":    "",
-		"tags":    []interface{}{},
-		"env":     map[string]interface{}{},
-		"params": map[string]string{
-			"model":    "gpt-4o",
-			"botToken": "tg-token-setup-1",
+		"tags": []map[string]string{
+			{"name": "model", "value": "kimi-coding/k2p5"},
+			{"name": "apiKey", "value": "kimi-api-key-setup-1"},
+			{"name": "botToken", "value": "tg-token-setup-1"},
 		},
+		"env": map[string]interface{}{},
 	}
 	w := performJSONRequest(t, s, http.MethodPost, "/vmm/spawn", spawnReq)
 	if w.Code != http.StatusOK {
@@ -346,8 +352,27 @@ func TestSpawnOpenclawSetupOnSpawn(t *testing.T) {
 	if !setModelCalled {
 		t.Fatalf("expected session_status to be called")
 	}
-	if !gatewayPatchCalled {
-		t.Fatalf("expected gateway config.patch to be called")
+	if !telegramPatchCalled {
+		t.Fatalf("expected gateway config.patch to be called for telegram")
+	}
+	rawStore, err := os.ReadFile(authStorePath)
+	if err != nil {
+		t.Fatalf("read auth store failed: %v", err)
+	}
+	var store map[string]interface{}
+	if err := json.Unmarshal(rawStore, &store); err != nil {
+		t.Fatalf("decode auth store failed: %v", err)
+	}
+	profiles, _ := store["profiles"].(map[string]interface{})
+	entry, _ := profiles["kimi-coding:default"].(map[string]interface{})
+	if entry["type"] != "api_key" {
+		t.Fatalf("expected auth profile type api_key, got %v", entry["type"])
+	}
+	if entry["provider"] != "kimi-coding" {
+		t.Fatalf("expected auth profile provider kimi-coding, got %v", entry["provider"])
+	}
+	if entry["key"] != "kimi-api-key-setup-1" {
+		t.Fatalf("expected auth profile key set from spawn tags, got %v", entry["key"])
 	}
 }
 

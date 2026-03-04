@@ -22,6 +22,8 @@ const (
 	ActionQuery             = "Query"
 	ActionExecute           = "Execute"
 	ActionChat              = "Chat"
+	ActionConfig            = "Config"
+	ActionApprovePairing    = "ApprovePairing"
 	ActionCreateSession     = "CreateSession"
 	ActionCloseSession      = "CloseSession"
 	ActionConfigureModel    = "ConfigureModel"
@@ -52,6 +54,8 @@ func LoadConfigFromEnv() schema.Config {
 			ActionQuery:             {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_QUERY", "/tools/invoke")},
 			ActionExecute:           {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_EXECUTE", "/tools/invoke")},
 			ActionChat:              {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CHAT", "/tools/invoke")},
+			ActionConfig:            {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CONFIG", "/tools/invoke")},
+			ActionApprovePairing:    {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_APPROVE_PAIRING", "/tools/invoke")},
 			ActionCreateSession:     {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CREATE_SESSION", "/tools/invoke")},
 			ActionCloseSession:      {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CLOSE_SESSION", "/tools/invoke")},
 			ActionConfigureModel:    {Method: http.MethodPost, Path: getEnvOrDefault("OPENCLAW_ENDPOINT_CONFIGURE_MODEL", "/tools/invoke")},
@@ -144,6 +148,16 @@ func (r *Openclaw) Apply(from string, meta vmmSchema.Meta, params map[string]str
 		if err != nil {
 			return vmmSchema.Result{}, fmt.Errorf("openclaw apply failed: %w", err)
 		}
+	case ActionConfig:
+		resp, err = r.Configure(ctx, meta, params)
+		if err != nil {
+			return vmmSchema.Result{}, fmt.Errorf("openclaw apply failed: %w", err)
+		}
+	case ActionApprovePairing:
+		resp, err = r.ApprovePairing(ctx, meta, params)
+		if err != nil {
+			return vmmSchema.Result{}, fmt.Errorf("openclaw apply failed: %w", err)
+		}
 	default:
 		command := extractCommand(meta, params)
 		if command == "" {
@@ -186,47 +200,33 @@ func (r *Openclaw) Apply(from string, meta vmmSchema.Meta, params map[string]str
 
 	currentSessionID := r.sessionID()
 	tags := []goarSchema.Tag{
-		{Name: "Data-Protocol", Value: "ao"},
-		{Name: "Variant", Value: "hymatrix0.1"},
-		{Name: "Type", Value: "Message"},
 		{Name: "Runtime", Value: "openclaw"},
-		{Name: "Action", Value: action},
+		{Name: "GatewayStatus", Value: resp.Status},
+		{Name: "StatusCode", Value: strconv.Itoa(resp.StatusCode)},
+		{Name: "SessionID", Value: currentSessionID},
 		{Name: "Reference", Value: requestID},
+		{Name: "Reply", Value: responseData},
 	}
 
-	output := map[string]interface{}{
-		"runtime":       "openclaw",
-		"action":        action,
-		"requestId":     requestID,
-		"gatewayStatus": resp.Status,
-		"statusCode":    resp.StatusCode,
-		"sessionId":     currentSessionID,
-		"gateway":       resp.JSON,
-	}
-	if action == ActionChat {
-		output["reply"] = responseData
+	// Forward X- prefixed tags to both messages
+	for key, value := range params {
+		if strings.HasPrefix(key, "X-") {
+			tags = append(tags, goarSchema.Tag{Name: key, Value: value})
+		}
 	}
 
 	result := vmmSchema.Result{
 		Messages: []*vmmSchema.ResMessage{
 			{
-				Sequence: requestID,
-				Target:   target,
-				Data:     responseData,
-				Tags:     tags,
+				Target: target,
+				Data:   responseData,
+				Tags:   tags,
 			},
 		},
 		Spawns:      []*vmmSchema.ResSpawn{},
 		Assignments: nil,
-		Output:      output,
-		Data:        responseData,
-		Cache: map[string]string{
-			"runtime":    "openclaw",
-			"action":     action,
-			"request_id": requestID,
-			"session_id": currentSessionID,
-		},
-		Error: nil,
+		Output:      responseData,
+		Error:       nil,
 	}
 
 	log.Info("openclaw apply success", "action", action, "requestId", requestID, "statusCode", resp.StatusCode)
@@ -307,6 +307,10 @@ func normalizeAction(action string) string {
 		return ActionExecute
 	case "chat":
 		return ActionChat
+	case "config", "configure", "configureconfig", "setconfig":
+		return ActionConfig
+	case "approvepairing", "approvepair", "pairingapprove", "approvetelegrampairing":
+		return ActionApprovePairing
 	case "createsession":
 		return ActionCreateSession
 	case "closesession":

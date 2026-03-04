@@ -77,6 +77,48 @@ func extractModelName(meta vmmSchema.Meta, params map[string]string) string {
 	return ""
 }
 
+func extractProviderName(meta vmmSchema.Meta, params map[string]string) string {
+	provider := strings.TrimSpace(params["provider"])
+	if provider == "" {
+		provider = strings.TrimSpace(params["Provider"])
+	}
+	if provider != "" {
+		return strings.ToLower(provider)
+	}
+	model := extractModelName(meta, params)
+	if idx := strings.Index(model, "/"); idx > 0 {
+		return strings.ToLower(strings.TrimSpace(model[:idx]))
+	}
+	return ""
+}
+
+func extractModelAPIKey(params map[string]string) string {
+	for _, key := range []string{
+		"apiKey", "ApiKey", "APIKey",
+		"modelApiKey", "ModelApiKey",
+		"KIMI_API_KEY", "KIMICODE_API_KEY", "MOONSHOT_API_KEY",
+		"OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+		"GEMINI_API_KEY", "GOOGLE_API_KEY",
+	} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func extractAuthProfileID(provider string, params map[string]string) string {
+	for _, key := range []string{"authProfileId", "AuthProfileId", "profileId", "ProfileId"} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	if provider == "" {
+		return ""
+	}
+	return provider + ":default"
+}
+
 func buildTelegramConfigPatch(params map[string]string) map[string]interface{} {
 	tg := map[string]interface{}{}
 	if v := strings.TrimSpace(params["botToken"]); v != "" {
@@ -101,6 +143,61 @@ func buildTelegramConfigPatch(params map[string]string) map[string]interface{} {
 			"telegram": tg,
 		},
 	}
+}
+
+func extractConfigRaw(meta vmmSchema.Meta, params map[string]string) string {
+	for _, key := range []string{"raw", "Raw", "patch", "Patch", "config", "Config"} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	if value := strings.TrimSpace(meta.Data); value != "" {
+		return value
+	}
+	return ""
+}
+
+func extractConfigAction(params map[string]string) string {
+	for _, key := range []string{"configAction", "ConfigAction", "method", "Method"} {
+		value := strings.TrimSpace(strings.ToLower(params[key]))
+		switch value {
+		case "config.patch", "patch":
+			return "config.patch"
+		case "config.apply", "apply":
+			return "config.apply"
+		}
+	}
+	return "config.patch"
+}
+
+func extractConfigBaseHash(params map[string]string) string {
+	for _, key := range []string{"baseHash", "BaseHash", "hash", "Hash"} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func extractPairingChannel(params map[string]string) string {
+	for _, key := range []string{"channel", "Channel"} {
+		if value := strings.TrimSpace(strings.ToLower(params[key])); value != "" {
+			return value
+		}
+	}
+	return "telegram"
+}
+
+func extractPairingCode(meta vmmSchema.Meta, params map[string]string) string {
+	for _, key := range []string{"code", "Code", "pairingCode", "PairingCode"} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	if value := strings.TrimSpace(meta.Data); value != "" {
+		return value
+	}
+	return ""
 }
 
 func parseStringList(input string) []string {
@@ -225,6 +322,51 @@ func findSessionIDRecursive(v interface{}) string {
 	case []interface{}:
 		for _, value := range vv {
 			if out := findSessionIDRecursive(value); out != "" {
+				return out
+			}
+		}
+	}
+	return ""
+}
+
+func extractConfigHash(body map[string]interface{}) string {
+	if len(body) == 0 {
+		return ""
+	}
+	for _, path := range [][]string{
+		{"payload", "hash"},
+		{"data", "payload", "hash"},
+		{"result", "payload", "hash"},
+		{"hash"},
+		{"data", "hash"},
+		{"result", "hash"},
+	} {
+		if value := lookupStringPath(body, path...); value != "" {
+			return value
+		}
+	}
+	return findConfigHashRecursive(body)
+}
+
+func findConfigHashRecursive(v interface{}) string {
+	switch vv := v.(type) {
+	case map[string]interface{}:
+		for key, value := range vv {
+			if normalizeKey(key) != "hash" {
+				continue
+			}
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				return strings.TrimSpace(text)
+			}
+		}
+		for _, value := range vv {
+			if out := findConfigHashRecursive(value); out != "" {
+				return out
+			}
+		}
+	case []interface{}:
+		for _, value := range vv {
+			if out := findConfigHashRecursive(value); out != "" {
 				return out
 			}
 		}
