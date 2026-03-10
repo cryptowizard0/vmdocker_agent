@@ -26,6 +26,16 @@ The runtime behavior can be customized via environment variables.
 - `OPENCLAW_GATEWAY_URL`: Base URL for the Openclaw gateway (default: `http://127.0.0.1:18789`).
 - `OPENCLAW_GATEWAY_TOKEN`: Authentication token for the gateway (optional).
 - `OPENCLAW_TIMEOUT_MS`: Request timeout in milliseconds (default: `30000`).
+- `OPENCLAW_CONFIG_TEMPLATE_PATH`: Read-only template copied on first startup (default: `/app/openclaw.default.json`).
+
+### Runtime Bootstrap
+- `OPENCLAW_STATE_DIR`: Explicit writable state directory. Highest priority.
+- `OPENCLAW_HOME`: Alternate home base. Runtime will use `<OPENCLAW_HOME>/.openclaw` when `OPENCLAW_STATE_DIR` is unset.
+- `HOME`: Fallback home base. Runtime will use `<HOME>/.openclaw` when `OPENCLAW_STATE_DIR` and `OPENCLAW_HOME` are unset.
+- Runtime only falls back to `/tmp/.openclaw` when no usable home directory is available.
+- `OPENCLAW_CONFIG_PATH`: Optional override for the effective runtime config path. If unset, runtime uses `<state-dir>/openclaw.json`.
+- `OPENCLAW_GATEWAY_MODE`: Optional gateway mode written into the effective config only when the config file is first materialized.
+- `OPENCLAW_GATEWAY_READY_WAIT_SECONDS`: Startup health-check timeout for the embedded gateway.
 
 ### Session Management
 - `OPENCLAW_SESSION_KEY`: Fallback session key if session creation fails (default: `main`).
@@ -54,39 +64,80 @@ Customize the API paths appended to the gateway base URL:
 - `OPENCLAW_ENDPOINT_CONFIGURE_MODEL`: Path for configure model action (default: `/tools/invoke`).
 - `OPENCLAW_ENDPOINT_CONFIGURE_TELEGRAM`: Path for configure telegram action (default: `/tools/invoke`).
 
-## 🐳 Quick Start with Docker
+## 🐳 OCI Image Workflow
 
 ### Prerequisites
 
 - Docker installed and running
 - Go 1.24+ (for local development)
 
-### Build Docker Image
+### Build OCI Image
 
 ```bash
-# Build image
 ./docker_build.sh <VERSION>
 ```
 
-**Parameters:**
 - `<VERSION>`: Image version tag (e.g., v1.0.0, latest, dev)
 
-**Examples:**
 ```bash
-# Build with specific version
 ./docker_build.sh v1.0.0
-
-# Build with latest tag
 ./docker_build.sh latest
 ```
 
-### Run Container
+### Run OCI Container
 
 ```bash
 ./docker_run.sh
 ```
 
-The container will start and expose the API on the configured port.
+The OCI image still exposes `/vmm/health`, `/vmm/spawn`, and `/vmm/apply` on port `8080`.
+
+## 🧪 Docker Sandbox Template Workflow
+
+This repository also ships a Docker Sandboxes template image for Docker Desktop 4.58+.
+
+### Build Sandbox Template
+
+```bash
+./docker_build_sandbox.sh <VERSION>
+```
+
+Example:
+
+```bash
+./docker_build_sandbox.sh latest
+```
+
+This step only builds the sandbox template image from [`Dockerfile.sandbox`](/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/Dockerfile.sandbox). It does not create or run a sandbox yet.
+
+### Create And Run Sandbox
+
+Use the helper script:
+
+```bash
+./docker_run_sandbox.sh
+```
+
+Or run the Docker Sandbox commands directly:
+
+```bash
+docker sandbox create --name hymatrix-openclaw-sandbox -t chriswebber/docker-openclaw-sandbox:latest shell /path/to/workspace
+docker sandbox run hymatrix-openclaw-sandbox
+```
+
+If you want Docker to create and run in one go, the CLI also supports:
+
+```bash
+docker sandbox run --name hymatrix-openclaw-sandbox -t chriswebber/docker-openclaw-sandbox:latest shell /path/to/workspace
+```
+
+After the sandbox is running, start the service inside it with:
+
+```bash
+docker sandbox exec hymatrix-openclaw-sandbox sh -lc 'start-vmdocker-agent.sh'
+```
+
+Cloud/provider usage is the only supported sandbox model path in this release. Docker Model Runner localhost bridging is intentionally out of scope for now.
 
 ## 🛠️ Local Development
 
@@ -109,6 +160,12 @@ go test -v ./...
 
 # Run tests with coverage
 go test -v -cover ./...
+
+# OCI smoke test
+./scripts/docker_test_requests.sh
+
+# Sandbox smoke test
+./scripts/docker_test_sandbox.sh
 ```
 
 ## 📡 API Reference
@@ -147,6 +204,8 @@ Supported spawn tag keys (Openclaw):
 - `provider` / `Provider`: provider prefix helper for model composition
 - `apiKey` / `ApiKey` / `APIKey` / `modelApiKey` / `ModelApiKey`: provider API key; runtime writes it into OpenClaw auth store (`auth-profiles.json`) as `<provider>:default`
 - `botToken`, `defaultAccount`, `dmPolicy`, `allowFrom`: initial Telegram patch fields
+
+If `apiKey` is omitted, the runtime does not fail fast. This is intentional for sandbox deployments that rely on externally injected provider credentials instead of local auth-store writes.
 
 Example:
 ```bash
@@ -360,7 +419,11 @@ For `Chat`, runtime additionally writes reply text to:
 ├── server/             # HTTP server implementation
 ├── utils/              # Helper utilities
 ├── Dockerfile          # Docker build file
+├── Dockerfile.sandbox  # Docker Sandboxes template build file
 ├── docker_build.sh     # Build script
+├── docker_build_sandbox.sh # Sandbox template build script
+├── docker_run_sandbox.sh # Sandbox create/run helper
+├── start-vmdocker-agent.sh # Shared bootstrap script for OCI/sandbox
 ├── docker_run.sh       # Run script
 └── main.go            # Application entry point
 ```
