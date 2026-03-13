@@ -30,6 +30,8 @@ The runtime behavior can be customized via environment variables.
 
 ### Runtime Bootstrap
 - `OPENCLAW_STATE_DIR`: Explicit writable state directory. Highest priority.
+- In Docker Sandbox mode, `vmdocker` should pass `OPENCLAW_STATE_DIR` using the resolved sandbox workspace path so OpenClaw state persists in the mounted host workspace.
+- `OPENCLAW_AGENT_WORKSPACE`: Optional override for OpenClaw's agent workspace. In Docker Sandbox mode this should be set to a path inside the mapped workspace, typically `<mapped>/.openclaw/workspace`.
 - `OPENCLAW_HOME`: Alternate home base. Runtime will use `<OPENCLAW_HOME>/.openclaw` when `OPENCLAW_STATE_DIR` is unset.
 - `HOME`: Fallback home base. Runtime will use `<HOME>/.openclaw` when `OPENCLAW_STATE_DIR` and `OPENCLAW_HOME` are unset.
 - Runtime only falls back to `/tmp/.openclaw` when no usable home directory is available.
@@ -95,6 +97,10 @@ The OCI image still exposes `/vmm/health`, `/vmm/spawn`, and `/vmm/apply` on por
 ## 🧪 Docker Sandbox Template Workflow
 
 This repository also ships a Docker Sandboxes template image for Docker Desktop 4.58+.
+
+Docker Sandbox exposes the primary workspace inside the sandbox at the same absolute path as on the host. Persistent OpenClaw state should therefore be configured through `OPENCLAW_STATE_DIR` based on that resolved host workspace path, rather than assuming a fixed in-sandbox mount like `/workspace`.
+
+For tighter workspace confinement, set `OPENCLAW_AGENT_WORKSPACE` inside the mapped directory as well. The runtime will then force `agents.defaults.workspace` to that path and enable `tools.fs.workspaceOnly=true`, so OpenClaw's own workspace files no longer fall back to `~/.openclaw/workspace`.
 
 ### Build Sandbox Template
 

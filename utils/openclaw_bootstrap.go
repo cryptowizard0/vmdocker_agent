@@ -24,6 +24,12 @@ type OpenclawPaths struct {
 	ConfigTemplate string
 	LogDir         string
 	GatewayLogPath string
+	AgentWorkspace string
+	HomeDir        string
+	TmpDir         string
+	XDGConfigHome  string
+	XDGCacheHome   string
+	XDGStateHome   string
 }
 
 func ResolveOpenclawStateDir(lookup EnvLookup, userHomeDir UserHomeDirFunc) string {
@@ -75,13 +81,50 @@ func ResolveOpenclawConfigPath(lookup EnvLookup, userHomeDir UserHomeDirFunc) st
 func ResolveOpenclawPaths(lookup EnvLookup, userHomeDir UserHomeDirFunc) OpenclawPaths {
 	stateDir := ResolveOpenclawStateDir(lookup, userHomeDir)
 	logDir := filepath.Join(stateDir, "logs")
+	agentWorkspace := strings.TrimSpace(lookup("OPENCLAW_AGENT_WORKSPACE"))
+	homeDir := strings.TrimSpace(lookup("HOME"))
+	tmpDir := strings.TrimSpace(lookup("TMPDIR"))
+	xdgConfigHome := strings.TrimSpace(lookup("XDG_CONFIG_HOME"))
+	xdgCacheHome := strings.TrimSpace(lookup("XDG_CACHE_HOME"))
+	xdgStateHome := strings.TrimSpace(lookup("XDG_STATE_HOME"))
 	return OpenclawPaths{
 		StateDir:       stateDir,
 		ConfigPath:     ResolveOpenclawConfigPath(lookup, userHomeDir),
 		ConfigTemplate: ResolveOpenclawConfigTemplatePath(lookup),
 		LogDir:         logDir,
 		GatewayLogPath: filepath.Join(logDir, "openclaw-gateway.log"),
+		AgentWorkspace: agentWorkspace,
+		HomeDir:        homeDir,
+		TmpDir:         tmpDir,
+		XDGConfigHome:  xdgConfigHome,
+		XDGCacheHome:   xdgCacheHome,
+		XDGStateHome:   xdgStateHome,
 	}
+}
+
+func ensureDirs(dirs []string) error {
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create dir %s failed: %w", dir, err)
+		}
+		_ = os.Chmod(dir, 0o700)
+	}
+	return nil
+}
+
+func atomicWriteFile(targetPath string, data []byte, perm os.FileMode) error {
+	tmpPath := targetPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, perm); err != nil {
+		return fmt.Errorf("write tmp file failed: %w", err)
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("move tmp file failed: %w", err)
+	}
+	return nil
 }
 
 func EnsureOpenclawStateLayout(stateDir string) error {
@@ -90,19 +133,15 @@ func EnsureOpenclawStateLayout(stateDir string) error {
 		return errors.New("state dir is empty")
 	}
 
-	dirs := []string{
+	if err := ensureDirs([]string{
 		stateDir,
 		filepath.Join(stateDir, "logs"),
 		filepath.Join(stateDir, "agents"),
 		filepath.Join(stateDir, "agents", "main"),
 		filepath.Join(stateDir, "agents", "main", "sessions"),
 		filepath.Join(stateDir, "agents", "main", "agent"),
-	}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create state dir %s failed: %w", dir, err)
-		}
-		_ = os.Chmod(dir, 0o700)
+	}); err != nil {
+		return err
 	}
 
 	sessionsPath := filepath.Join(stateDir, "agents", "main", "sessions", "sessions.json")
@@ -116,6 +155,17 @@ func EnsureOpenclawStateLayout(stateDir string) error {
 		return fmt.Errorf("write sessions store failed: %w", err)
 	}
 	return nil
+}
+
+func EnsureRuntimeDirectories(paths OpenclawPaths) error {
+	return ensureDirs([]string{
+		paths.HomeDir,
+		paths.TmpDir,
+		paths.XDGConfigHome,
+		paths.XDGCacheHome,
+		paths.XDGStateHome,
+		paths.AgentWorkspace,
+	})
 }
 
 func MaterializeOpenclawConfig(templatePath, targetPath, gatewayMode string) error {
@@ -150,15 +200,40 @@ func MaterializeOpenclawConfig(templatePath, targetPath, gatewayMode string) err
 		return fmt.Errorf("create config dir failed: %w", err)
 	}
 
-	tmpPath := targetPath + ".tmp"
-	if err := os.WriteFile(tmpPath, raw, 0o600); err != nil {
-		return fmt.Errorf("write config tmp failed: %w", err)
+	return atomicWriteFile(targetPath, raw, 0o600)
+}
+
+func ApplyManagedOpenclawConfig(targetPath string, paths OpenclawPaths) error {
+	if strings.TrimSpace(paths.AgentWorkspace) == "" {
+		return nil
 	}
-	if err := os.Rename(tmpPath, targetPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("move config tmp failed: %w", err)
+
+	raw, err := os.ReadFile(targetPath)
+	if err != nil {
+		return fmt.Errorf("read config for managed defaults failed: %w", err)
 	}
-	return nil
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return fmt.Errorf("decode config for managed defaults failed: %w", err)
+	}
+
+	defaults := ensureMap(ensureMap(cfg, "agents"), "defaults")
+	defaults["workspace"] = paths.AgentWorkspace
+	tools := ensureMap(cfg, "tools")
+	fs := ensureMap(tools, "fs")
+	fs["workspaceOnly"] = true
+
+	formatted, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode managed defaults failed: %w", err)
+	}
+	formatted = append(formatted, '\n')
+	if string(formatted) == string(raw) {
+		return nil
+	}
+
+	return atomicWriteFile(targetPath, formatted, 0o600)
 }
 
 func PrepareOpenclawRuntime(lookup EnvLookup, userHomeDir UserHomeDirFunc) (OpenclawPaths, error) {
@@ -166,13 +241,28 @@ func PrepareOpenclawRuntime(lookup EnvLookup, userHomeDir UserHomeDirFunc) (Open
 		lookup = os.Getenv
 	}
 	paths := ResolveOpenclawPaths(lookup, userHomeDir)
+	if err := EnsureRuntimeDirectories(paths); err != nil {
+		return OpenclawPaths{}, err
+	}
 	if err := EnsureOpenclawStateLayout(paths.StateDir); err != nil {
 		return OpenclawPaths{}, err
 	}
 	if err := MaterializeOpenclawConfig(paths.ConfigTemplate, paths.ConfigPath, strings.TrimSpace(lookup("OPENCLAW_GATEWAY_MODE"))); err != nil {
 		return OpenclawPaths{}, err
 	}
+	if err := ApplyManagedOpenclawConfig(paths.ConfigPath, paths); err != nil {
+		return OpenclawPaths{}, err
+	}
 	return paths, nil
+}
+
+func ensureMap(root map[string]interface{}, key string) map[string]interface{} {
+	if existing, ok := root[key].(map[string]interface{}); ok && existing != nil {
+		return existing
+	}
+	next := map[string]interface{}{}
+	root[key] = next
+	return next
 }
 
 func overrideGatewayMode(raw []byte, gatewayMode string) ([]byte, error) {

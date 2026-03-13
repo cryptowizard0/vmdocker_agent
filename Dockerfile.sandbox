@@ -2,7 +2,7 @@ FROM golang:1.24 AS builder
 
 WORKDIR /app
 COPY go.mod ./
-RUN go mod download
+RUN go mod tidy
 
 COPY . .
 RUN CGO_ENABLED=0 go build -o /app/main .
@@ -34,6 +34,11 @@ RUN set -eux; \
         microdnf clean all; \
     fi
 
+RUN set -eux; \
+    usermod -G agent agent; \
+    gpasswd -d agent sudo || true; \
+    gpasswd -d agent docker || true
+
 RUN chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /app/bootstrap /app/openclaw.mjs && \
     chown -R agent:agent /app /usr/local/bin/start-vmdocker-agent.sh
 
@@ -45,6 +50,11 @@ ENV OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
 ENV OPENCLAW_CONFIG_TEMPLATE_PATH=/app/openclaw.default.json
 ENV OPENCLAW_TIMEOUT_MS=30000
 ENV HOME=/home/agent
+# Make Node.js honour HTTPS_PROXY/HTTP_PROXY env vars that Docker Sandbox injects.
+# Without this flag Node's built-in https module ignores those variables and
+# tries to connect directly, which fails in sandbox environments that only
+# allow outbound traffic through the proxy.
+ENV NODE_OPTIONS=--use-env-proxy
 
 USER agent
 WORKDIR /workspace
