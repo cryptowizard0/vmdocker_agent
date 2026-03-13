@@ -16,6 +16,7 @@ USER root
 WORKDIR /app
 
 COPY --from=openclaw /usr/local/ /usr/local/
+COPY --from=openclaw /app/ /app/
 COPY --from=builder /app/main /app/main
 COPY --from=builder /app/bootstrap /app/bootstrap
 COPY start-vmdocker-agent.sh /usr/local/bin/start-vmdocker-agent.sh
@@ -33,7 +34,7 @@ RUN set -eux; \
         microdnf clean all; \
     fi
 
-RUN chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /app/bootstrap && \
+RUN chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /app/bootstrap /app/openclaw.mjs && \
     chown -R agent:agent /app /usr/local/bin/start-vmdocker-agent.sh
 
 ENV VMDOCKER_AGENT_APP_ROOT=/app
