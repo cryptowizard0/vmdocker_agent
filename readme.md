@@ -103,6 +103,13 @@ Docker Sandbox exposes the primary workspace inside the sandbox at the same abso
 
 For tighter workspace confinement, set `OPENCLAW_AGENT_WORKSPACE` inside the mapped directory as well. The runtime will then force `agents.defaults.workspace` to that path and enable `tools.fs.workspaceOnly=true`, so OpenClaw's own workspace files no longer fall back to `~/.openclaw/workspace`.
 
+Sandbox startup now runs a security audit before launching OpenClaw. The image treats passwordless `sudo` for `agent` as a fatal misconfiguration and refuses to start if it is still present. Platform-level exposures such as `docker.sock`, `virtiofs`, and missing AppArmor/SELinux visibility are logged as high-priority warnings but do not block startup, because they are controlled by Docker Sandbox rather than this image.
+
+Recommended deployment posture:
+- Do not treat Docker Sandbox alone as a hard trust boundary.
+- If your platform allows it, avoid exposing `/var/run/docker.sock` to untrusted sandboxes.
+- Limit the shared workspace path to the smallest host directory you actually need.
+
 ### Build Sandbox Template
 
 ```bash

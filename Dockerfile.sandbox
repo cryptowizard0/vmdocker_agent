@@ -38,7 +38,8 @@ RUN set -eux; \
 RUN set -eux; \
     usermod -G agent agent; \
     gpasswd -d agent sudo || true; \
-    gpasswd -d agent docker || true
+    gpasswd -d agent docker || true; \
+    rm -f /etc/sudoers.d/agent
 
 RUN set -eux; \
     chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /app/bootstrap /app/openclaw.mjs /etc/profile.d/vmdocker-sandbox.sh; \
@@ -47,6 +48,12 @@ RUN set -eux; \
     fi; \
     rm -rf /home/agent/workspace; \
     chown -R agent:agent /app /usr/local/bin/start-vmdocker-agent.sh /etc/profile.d/vmdocker-sandbox.sh
+
+RUN set -eux; \
+    test ! -e /etc/sudoers.d/agent; \
+    if command -v sudo >/dev/null 2>&1; then \
+        su -s /bin/sh agent -c '! sudo -n true'; \
+    fi
 
 ENV VMDOCKER_AGENT_APP_ROOT=/app
 ENV RUNTIME_TYPE=openclaw

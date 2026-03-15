@@ -3,6 +3,72 @@ set -eu
 
 APP_ROOT="${VMDOCKER_AGENT_APP_ROOT:-/app}"
 
+audit_info() {
+    echo "[security][info] $*" >&2
+}
+
+audit_warn() {
+    echo "[security][warn] $*" >&2
+}
+
+audit_fail() {
+    echo "[security][fatal] $*" >&2
+    exit 1
+}
+
+audit_mount_fstype() {
+    target="$1"
+    if command -v stat >/dev/null 2>&1; then
+        stat -f -c %T "${target}" 2>/dev/null && return 0
+        stat -f %T "${target}" 2>/dev/null && return 0
+    fi
+    if command -v mount >/dev/null 2>&1; then
+        mount 2>/dev/null | awk -v path="${target}" '$3 == path { print $5; exit }'
+    fi
+}
+
+run_security_audit() {
+    audit_info "running startup security audit"
+
+    if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        audit_fail "passwordless sudo is still available for user $(id -un); this is an image misconfiguration"
+    fi
+    audit_info "sudo escalation check passed"
+
+    if [ -S /var/run/docker.sock ]; then
+        audit_warn "docker.sock is exposed inside the sandbox; this comes from the Docker Sandbox platform, not this image"
+    fi
+
+    workspace_root="${WORKSPACE_DIR:-${OPENCLAW_HOME:-}}"
+    if [ -n "${workspace_root}" ] && [ -d "${workspace_root}" ]; then
+        workspace_fstype="$(audit_mount_fstype "${workspace_root}" || true)"
+        if [ "${workspace_fstype}" = "virtiofs" ]; then
+            audit_warn "workspace is mounted via virtiofs; host access scope is controlled by the Docker Sandbox platform"
+        fi
+    fi
+
+    if [ -r /sys/module/apparmor/parameters/enabled ]; then
+        apparmor_enabled="$(tr -d '\n' </sys/module/apparmor/parameters/enabled 2>/dev/null || true)"
+        if [ "${apparmor_enabled}" = "Y" ] || [ "${apparmor_enabled}" = "y" ]; then
+            audit_info "AppArmor support detected"
+        else
+            audit_warn "AppArmor support is not enabled; confinement depends on the Docker Sandbox platform"
+        fi
+    else
+        audit_warn "AppArmor visibility is unavailable; confinement depends on the Docker Sandbox platform"
+    fi
+
+    if [ -d /sys/fs/selinux ]; then
+        if [ -r /sys/fs/selinux/enforce ] && [ "$(cat /sys/fs/selinux/enforce 2>/dev/null || echo 0)" = "1" ]; then
+            audit_info "SELinux enforcing mode detected"
+        else
+            audit_warn "SELinux is present but not enforcing; confinement depends on the Docker Sandbox platform"
+        fi
+    else
+        audit_warn "SELinux is not visible inside the sandbox; confinement depends on the Docker Sandbox platform"
+    fi
+}
+
 health_probe() {
     url="$1"
     auth_token="${OPENCLAW_GATEWAY_TOKEN:-${OPENCLAW_GATEWAY_PASSWORD:-}}"
@@ -88,6 +154,7 @@ start_openclaw_gateway() {
 }
 
 if [ "${RUNTIME_TYPE:-openclaw}" = "openclaw" ]; then
+    run_security_audit
     start_openclaw_gateway
 fi
 
