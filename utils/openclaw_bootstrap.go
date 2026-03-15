@@ -204,7 +204,7 @@ func MaterializeOpenclawConfig(templatePath, targetPath, gatewayMode string) err
 }
 
 func ApplyManagedOpenclawConfig(targetPath string, paths OpenclawPaths) error {
-	if strings.TrimSpace(paths.AgentWorkspace) == "" {
+	if strings.TrimSpace(paths.AgentWorkspace) == "" && strings.TrimSpace(paths.LogDir) == "" {
 		return nil
 	}
 
@@ -218,11 +218,17 @@ func ApplyManagedOpenclawConfig(targetPath string, paths OpenclawPaths) error {
 		return fmt.Errorf("decode config for managed defaults failed: %w", err)
 	}
 
-	defaults := ensureMap(ensureMap(cfg, "agents"), "defaults")
-	defaults["workspace"] = paths.AgentWorkspace
-	tools := ensureMap(cfg, "tools")
-	fs := ensureMap(tools, "fs")
-	fs["workspaceOnly"] = true
+	if strings.TrimSpace(paths.AgentWorkspace) != "" {
+		defaults := ensureMap(ensureMap(cfg, "agents"), "defaults")
+		defaults["workspace"] = paths.AgentWorkspace
+		tools := ensureMap(cfg, "tools")
+		fs := ensureMap(tools, "fs")
+		fs["workspaceOnly"] = true
+	}
+	if strings.TrimSpace(paths.LogDir) != "" {
+		logging := ensureMap(cfg, "logging")
+		logging["file"] = filepath.Join(paths.LogDir, "openclaw.log")
+	}
 
 	formatted, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

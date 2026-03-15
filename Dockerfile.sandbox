@@ -20,6 +20,7 @@ COPY --from=openclaw /app/ /app/
 COPY --from=builder /app/main /app/main
 COPY --from=builder /app/bootstrap /app/bootstrap
 COPY start-vmdocker-agent.sh /usr/local/bin/start-vmdocker-agent.sh
+COPY sandbox-profile.sh /etc/profile.d/vmdocker-sandbox.sh
 COPY openclaw.default.json /app/openclaw.default.json
 
 RUN set -eux; \
@@ -39,8 +40,13 @@ RUN set -eux; \
     gpasswd -d agent sudo || true; \
     gpasswd -d agent docker || true
 
-RUN chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /app/bootstrap /app/openclaw.mjs && \
-    chown -R agent:agent /app /usr/local/bin/start-vmdocker-agent.sh
+RUN set -eux; \
+    chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /app/bootstrap /app/openclaw.mjs /etc/profile.d/vmdocker-sandbox.sh; \
+    if [ -f /etc/profile ] && ! grep -q 'vmdocker-sandbox.sh' /etc/profile; then \
+        printf '\n[ -f /etc/profile.d/vmdocker-sandbox.sh ] && . /etc/profile.d/vmdocker-sandbox.sh\n' >> /etc/profile; \
+    fi; \
+    rm -rf /home/agent/workspace; \
+    chown -R agent:agent /app /usr/local/bin/start-vmdocker-agent.sh /etc/profile.d/vmdocker-sandbox.sh
 
 ENV VMDOCKER_AGENT_APP_ROOT=/app
 ENV RUNTIME_TYPE=openclaw
@@ -50,6 +56,7 @@ ENV OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
 ENV OPENCLAW_CONFIG_TEMPLATE_PATH=/app/openclaw.default.json
 ENV OPENCLAW_TIMEOUT_MS=30000
 ENV HOME=/home/agent
+ENV NODE_DISABLE_COMPILE_CACHE=1
 # Make Node.js honour HTTPS_PROXY/HTTP_PROXY env vars that Docker Sandbox injects.
 # Without this flag Node's built-in https module ignores those variables and
 # tries to connect directly, which fails in sandbox environments that only

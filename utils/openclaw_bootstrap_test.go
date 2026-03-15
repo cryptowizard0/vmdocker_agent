@@ -115,6 +115,7 @@ func TestPrepareOpenclawRuntimeMaterializesConfigOnce(t *testing.T) {
 		"\"mode\": \"proxy\"",
 		"\"workspace\": \"" + env["OPENCLAW_AGENT_WORKSPACE"] + "\"",
 		"\"workspaceOnly\": true",
+		"\"file\": \"" + filepath.Join(env["OPENCLAW_STATE_DIR"], "logs", "openclaw.log") + "\"",
 		"\"visibility\": \"all\"",
 	} {
 		if !strings.Contains(text, snippet) {
@@ -143,6 +144,9 @@ func TestPrepareOpenclawRuntimeMaterializesConfigOnce(t *testing.T) {
 	}
 	if !strings.Contains(text, "\"workspaceOnly\": true") {
 		t.Fatalf("expected managed workspaceOnly to persist: %s", text)
+	}
+	if !strings.Contains(text, "\"file\": \""+filepath.Join(env["OPENCLAW_STATE_DIR"], "logs", "openclaw.log")+"\"") {
+		t.Fatalf("expected managed log file to persist: %s", text)
 	}
 	if !strings.Contains(text, "\"visibility\": \"all\"") {
 		t.Fatalf("expected unrelated config to be preserved: %s", text)

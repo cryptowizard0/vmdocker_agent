@@ -38,6 +38,7 @@ The runtime behavior can be customized via environment variables.
 - `OPENCLAW_CONFIG_PATH`: Optional override for the effective runtime config path. If unset, runtime uses `<state-dir>/openclaw.json`.
 - `OPENCLAW_GATEWAY_MODE`: Optional gateway mode written into the effective config only when the config file is first materialized.
 - `OPENCLAW_GATEWAY_READY_WAIT_SECONDS`: Startup health-check timeout for the embedded gateway.
+- `NODE_DISABLE_COMPILE_CACHE`: Defaults to `1` in the sandbox image to avoid Node 22 compile-cache crashes during OpenClaw hot restarts after config changes such as Telegram setup.
 
 ### Session Management
 - `OPENCLAW_SESSION_KEY`: Fallback session key if session creation fails (default: `main`).
