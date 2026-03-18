@@ -166,6 +166,41 @@ go build -o vmdocker-container
 ./vmdocker-container
 ```
 
+### Generating A VMDocker Module
+
+`vmdocker_agent` now owns the module-generation flow for sandbox modules.
+
+```bash
+go run ./cmd/module
+```
+
+The command automatically reads `/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/.env`.
+
+Fill the common entries there first:
+
+```dotenv
+VMDOCKER_URL=http://127.0.0.1:8080
+VMDOCKER_PRIVATE_KEY=
+```
+
+Then enable one generation mode in the same file:
+
+- Pull mode: `VMDOCKER_SANDBOX_IMAGE_NAME`, optional `VMDOCKER_SANDBOX_IMAGE_ID`
+- Build mode: `VMDOCKER_BUILD_DOCKERFILE`, `VMDOCKER_BUILD_CONTEXT_DIR`, `VMDOCKER_BUILD_TAG`
+
+The repository already includes a ready-to-fill `.env` template with all of these entries commented by mode.
+
+What `go run ./cmd/module` does now:
+
+1. Resolve the final local image using Pull mode or Build mode
+2. Export that image with `docker save`
+3. Compress the archive with `gzip`
+4. Store the compressed bytes in the generated module bundle `data`
+5. Write a local file `mod-<module-id>.json`
+6. Print the generated module id and local file path
+
+The generated module is therefore self-contained for cold starts. If a VMDocker node later does not have the image locally, it can restore it from the module file instead of rebuilding it from a Dockerfile.
+
 ### Testing
 
 ```bash
