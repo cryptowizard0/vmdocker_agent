@@ -48,7 +48,7 @@ func main() {
 	}
 
 	fmt.Printf("[module] generate and save module success, id %s\n", itemID)
-	fmt.Printf("[module] local bundle file: %s\n", filepath.Join(".", "mod-"+itemID+".json"))
+	fmt.Printf("[module] local bundle file: %s\n", filepath.Join(".", "mod", "mod-"+itemID+".json"))
 }
 
 func newSDK() (*sdk.SDK, error) {

@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	vmdockerUtils "github.com/cryptowizard0/vmdocker/vmdocker/utils"
 	arSchema "github.com/permadao/goar/schema"
 )
 
@@ -95,7 +94,6 @@ func buildModeImage(ctx context.Context) (localImage, error) {
 	}
 
 	contextRef := os.Getenv("VMDOCKER_BUILD_CONTEXT_URL")
-	contextArchive := ""
 	if contextRef == "" {
 		if localDockerfilePath == "" {
 			return localImage{}, fmt.Errorf("VMDOCKER_BUILD_CONTEXT_URL is required when using VMDOCKER_BUILD_DOCKERFILE_PATH without VMDOCKER_BUILD_DOCKERFILE")
@@ -105,14 +103,10 @@ func buildModeImage(ctx context.Context) (localImage, error) {
 		if err != nil {
 			return localImage{}, fmt.Errorf("resolve build context path %s: %w", contextRef, err)
 		}
-		contextArchive, err = vmdockerUtils.CompressDirectory(contextRef)
-		if err != nil {
-			return localImage{}, fmt.Errorf("compress build context at %s: %w", contextRef, err)
-		}
 	}
 
 	buildArgs := BuildArgsFromEnvMap()
-	buildTag := GetEnvWith("VMDOCKER_BUILD_TAG", defaultBuildTag(string(content), os.Getenv("VMDOCKER_BUILD_CONTEXT_URL"), contextArchive, buildArgs))
+	buildTag := GetEnvWith("VMDOCKER_BUILD_TAG", defaultBuildTag(string(content), contextRef, buildArgs))
 	logProgressf("build image: tag=%s context=%s build_args=%d", buildTag, contextRef, len(buildArgs))
 	if err := dockerBuild(ctx, string(content), contextRef, buildTag, buildArgs); err != nil {
 		return localImage{}, err
@@ -266,13 +260,11 @@ func BuildArgsFromEnvMap() map[string]string {
 	return ordered
 }
 
-func defaultBuildTag(dockerfile, contextURL, contextArchive string, buildArgs map[string]string) string {
+func defaultBuildTag(dockerfile, contextRef string, buildArgs map[string]string) string {
 	sum := sha256.New()
 	sum.Write([]byte(dockerfile))
 	sum.Write([]byte{0})
-	sum.Write([]byte(contextURL))
-	sum.Write([]byte{0})
-	sum.Write([]byte(contextArchive))
+	sum.Write([]byte(contextRef))
 	sum.Write([]byte{0})
 	for _, buildArg := range sortedBuildArgs(buildArgs) {
 		sum.Write([]byte(buildArg))

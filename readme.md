@@ -196,7 +196,7 @@ What `go run ./cmd/module` does now:
 2. Export that image with `docker save`
 3. Compress the archive with `gzip`
 4. Store the compressed bytes in the generated module bundle `data`
-5. Write a local file `mod-<module-id>.json`
+5. Write a local file `mod/mod-<module-id>.json`
 6. Print the generated module id and local file path
 
 The generated module is therefore self-contained for cold starts. If a VMDocker node later does not have the image locally, it can restore it from the module file instead of rebuilding it from a Dockerfile.
