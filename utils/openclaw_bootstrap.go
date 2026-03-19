@@ -110,7 +110,9 @@ func ensureDirs(dirs []string) error {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create dir %s failed: %w", dir, err)
 		}
-		_ = os.Chmod(dir, 0o700)
+		if err := os.Chmod(dir, 0o777); err != nil {
+			return fmt.Errorf("chmod dir %s failed: %w", dir, err)
+		}
 	}
 	return nil
 }

@@ -181,8 +181,12 @@ func TestPrepareOpenclawRuntimeMaterializesConfigOnce(t *testing.T) {
 		env["XDG_CACHE_HOME"],
 		env["XDG_STATE_HOME"],
 	} {
-		if _, err := os.Stat(dir); err != nil {
+		info, err := os.Stat(dir)
+		if err != nil {
 			t.Fatalf("expected runtime dir %q: %v", dir, err)
+		}
+		if got := info.Mode().Perm(); got != 0o777 {
+			t.Fatalf("runtime dir %q perm = %o, want 777", dir, got)
 		}
 	}
 }

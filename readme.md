@@ -30,8 +30,8 @@ The runtime behavior can be customized via environment variables.
 
 ### Runtime Bootstrap
 - `OPENCLAW_STATE_DIR`: Explicit writable state directory. Highest priority.
-- In Docker Sandbox mode, `vmdocker` should pass `OPENCLAW_STATE_DIR` using the resolved sandbox workspace path so OpenClaw state persists in the mounted host workspace.
-- `OPENCLAW_AGENT_WORKSPACE`: Optional override for OpenClaw's agent workspace. In Docker Sandbox mode this should be set to a path inside the mapped workspace, typically `<mapped>/.openclaw/workspace`.
+- In both Docker and Docker Sandbox modes, `vmdocker` now resolves a per-instance workspace and points OpenClaw state into that mapped host directory.
+- `OPENCLAW_AGENT_WORKSPACE`: Optional override for OpenClaw's agent workspace. This should be set to a path inside the mapped runtime workspace, typically `<mapped>/.openclaw/workspace`.
 - `OPENCLAW_HOME`: Alternate home base. Runtime will use `<OPENCLAW_HOME>/.openclaw` when `OPENCLAW_STATE_DIR` is unset.
 - `HOME`: Fallback home base. Runtime will use `<HOME>/.openclaw` when `OPENCLAW_STATE_DIR` and `OPENCLAW_HOME` are unset.
 - Runtime only falls back to `/tmp/.openclaw` when no usable home directory is available.
@@ -103,6 +103,26 @@ Docker Sandbox exposes the primary workspace inside the sandbox at the same abso
 
 For tighter workspace confinement, set `OPENCLAW_AGENT_WORKSPACE` inside the mapped directory as well. The runtime will then force `agents.defaults.workspace` to that path and enable `tools.fs.workspaceOnly=true`, so OpenClaw's own workspace files no longer fall back to `~/.openclaw/workspace`.
 
+The VMDocker runtime now standardizes the writable layout for both backends to:
+
+```text
+<workspace-root>/sandbox_workspace/<pid>
+```
+
+with these default paths inside that per-instance workspace:
+
+- `OPENCLAW_HOME=<workspace>`
+- `OPENCLAW_STATE_DIR=<workspace>/.openclaw`
+- `OPENCLAW_CONFIG_PATH=<workspace>/.openclaw/openclaw.json`
+- `OPENCLAW_AGENT_WORKSPACE=<workspace>/.openclaw/workspace`
+- `HOME=<workspace>/.home`
+- `TMPDIR=<workspace>/.tmp`
+- `XDG_CONFIG_HOME=<workspace>/.xdg/config`
+- `XDG_CACHE_HOME=<workspace>/.xdg/cache`
+- `XDG_STATE_HOME=<workspace>/.xdg/state`
+
+This is the contract a portable `vmdocker_agent` image should expect from `vmdocker`.
+
 Sandbox startup now runs a security audit before launching OpenClaw. The image treats passwordless `sudo` for `agent` as a fatal misconfiguration and refuses to start if it is still present. Platform-level exposures such as `docker.sock`, `virtiofs`, and missing AppArmor/SELinux visibility are logged as high-priority warnings but do not block startup, because they are controlled by Docker Sandbox rather than this image.
 
 Recommended deployment posture:
@@ -168,7 +188,7 @@ go build -o vmdocker-container
 
 ### Generating A VMDocker Module
 
-`vmdocker_agent` now owns the module-generation flow for sandbox modules.
+`vmdocker_agent` now owns the module-generation flow for portable VMDocker modules.
 
 ```bash
 go run ./cmd/module
@@ -200,6 +220,23 @@ What `go run ./cmd/module` does now:
 6. Print the generated module id and local file path
 
 The generated module is therefore self-contained for cold starts. If a VMDocker node later does not have the image locally, it can restore it from the module file instead of rebuilding it from a Dockerfile.
+
+The generated module does not pin a runtime backend anymore. Backend selection now happens at spawn time through the `Runtime-Backend` tag, with OS-specific defaults applied by `vmdocker` when the spawn request does not provide that tag.
+
+The generated module should carry the image startup contract through module tags:
+
+- `Start-Command=/usr/local/bin/start-vmdocker-agent.sh`
+- optional metadata such as `Sandbox-Agent` and `Openclaw-Version`
+
+Recommended split:
+
+- Module tags: describe the image, especially `Start-Command`
+- Spawn tags: choose the runtime, especially `Runtime-Backend`
+
+Current backend behavior:
+
+- `docker`: root filesystem is mounted read-only; writable runtime state lives in the mapped instance workspace
+- `sandbox`: VMDocker hardens common writable locations and keeps the mapped instance workspace as the intended writable area
 
 ### Testing
 

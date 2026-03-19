@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	DefaultRuntimeBackend      = "sandbox"
 	DefaultSandboxAgent        = "shell"
 	DefaultOpenclawVersion     = "2026.3.1-beta.1"
+	DefaultStartCommand        = "/usr/local/bin/start-vmdocker-agent.sh"
 	ModuleFormat               = "hymx.vmdocker.v0.0.1"
 	ImageSourceTag             = "Image-Source"
 	ImageArchiveTag            = "Image-Archive-Format"
@@ -45,11 +45,7 @@ type localImage struct {
 var progressWriter io.Writer = os.Stdout
 
 func GenerateModuleArtifact() (ModuleArtifact, error) {
-	base := []arSchema.Tag{
-		{Name: "Runtime-Backend", Value: DefaultRuntimeBackend},
-		{Name: "Sandbox-Agent", Value: DefaultSandboxAgent},
-		{Name: "Openclaw-Version", Value: DefaultOpenclawVersion},
-	}
+	base := baseModuleTags()
 
 	logProgressf("start generating module artifact")
 	image, err := prepareFinalImage(context.Background())
@@ -76,6 +72,14 @@ func GenerateModuleArtifact() (ModuleArtifact, error) {
 		ModuleBytes: moduleBytes,
 		Tags:        tags,
 	}, nil
+}
+
+func baseModuleTags() []arSchema.Tag {
+	return []arSchema.Tag{
+		{Name: "Sandbox-Agent", Value: DefaultSandboxAgent},
+		{Name: "Openclaw-Version", Value: DefaultOpenclawVersion},
+		{Name: "Start-Command", Value: DefaultStartCommand},
+	}
 }
 
 func prepareFinalImage(ctx context.Context) (localImage, error) {
