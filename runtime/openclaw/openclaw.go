@@ -298,9 +298,14 @@ type checkpointState struct {
 }
 
 func (r *Openclaw) Checkpoint() (string, error) {
+	sessionID := strings.TrimSpace(r.sessionID())
+	if sessionID == "" {
+		return "", fmt.Errorf("openclaw checkpoint sessionId is empty")
+	}
+
 	payload, err := json.Marshal(checkpointState{
 		Format:    checkpointFormatV1,
-		SessionID: r.sessionID(),
+		SessionID: sessionID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal openclaw checkpoint failed: %w", err)

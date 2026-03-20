@@ -397,6 +397,14 @@ func TestNewRestoredRejectsEmptyCheckpointState(t *testing.T) {
 	}
 }
 
+func TestCheckpointRejectsEmptySessionID(t *testing.T) {
+	rt := &Openclaw{}
+
+	if _, err := rt.Checkpoint(); err == nil {
+		t.Fatalf("expected checkpoint without session id to fail")
+	}
+}
+
 func TestApplyApprovePairing(t *testing.T) {
 	createCalled := false
 	approveCalled := false
