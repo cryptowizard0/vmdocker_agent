@@ -95,3 +95,11 @@ func (r *RuntimeTest) Apply(from string, meta vmmSchema.Meta, params map[string]
 	log.Info("apply response", "action", action, "target", target, "sequence", sequence, "data", responseData, "messages", len(result.Messages))
 	return result, nil
 }
+
+func (r *RuntimeTest) Checkpoint() (string, error) {
+	return "", nil
+}
+
+func (r *RuntimeTest) Restore(string) error {
+	return nil
+}

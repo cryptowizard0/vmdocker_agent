@@ -26,6 +26,8 @@ func setupTestServer(t *testing.T) *Server {
 	engine := s.engine.Group("/vmm")
 	engine.POST("/health", s.health)
 	engine.POST("/apply", s.apply)
+	engine.POST("/checkpoint", s.checkpoint)
+	engine.POST("/restore", s.restore)
 	engine.POST("/spawn", s.spawn)
 
 	return s
@@ -91,6 +93,15 @@ func TestApplyWithoutSpawn(t *testing.T) {
 	}
 	if res["msg"] != "runtime is nil" {
 		t.Fatalf("expected msg runtime is nil, got %q", res["msg"])
+	}
+}
+
+func TestCheckpointWithoutSpawn(t *testing.T) {
+	s := setupTestServer(t)
+
+	w := performJSONRequest(t, s, http.MethodPost, "/vmm/checkpoint", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", w.Code)
 	}
 }
 
@@ -250,6 +261,142 @@ func TestSpawnAndApplyOpenclaw(t *testing.T) {
 	}
 	if !sendCalled {
 		t.Fatalf("expected sessions_send to be called")
+	}
+}
+
+func TestRestoreAndApplyTestRuntime(t *testing.T) {
+	t.Setenv("RUNTIME_TYPE", "test")
+	s := setupTestServer(t)
+
+	restoreReq := runtimeRestoreRequest{
+		Env:   vmmSchema.Env{},
+		State: "",
+	}
+	w := performJSONRequest(t, s, http.MethodPost, "/vmm/restore", restoreReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected restore status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = performJSONRequest(t, s, http.MethodPost, "/vmm/checkpoint", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected checkpoint status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	applyReq := vmdockerSchema.ApplyRequest{
+		From: "target-restore-1",
+		Meta: vmmSchema.Meta{
+			Action:   "Ping",
+			Sequence: 8,
+		},
+		Params: map[string]string{
+			"Action":    "Ping",
+			"Reference": "8",
+		},
+	}
+	w = performJSONRequest(t, s, http.MethodPost, "/vmm/apply", applyReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected apply status 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRestoreOpenclawUsesCheckpointState(t *testing.T) {
+	createCalled := false
+	sendCalled := false
+	seenSessionKey := ""
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "data": "pong"})
+		case "/tools/invoke":
+			var req openclawSchema.ToolInvokeRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			switch req.Tool {
+			case "sessions_create":
+				createCalled = true
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"status": "ok",
+					"data":   map[string]interface{}{"sessionId": "unexpected-new-session"},
+				})
+			case "sessions_send":
+				sendCalled = true
+				seenSessionKey = req.SessionKey
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"status": "ok",
+					"data":   map[string]interface{}{"message": "restored"},
+				})
+			default:
+				http.Error(w, "unsupported tool", http.StatusBadRequest)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	t.Setenv("RUNTIME_TYPE", "openclaw")
+	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
+	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
+
+	s := setupTestServer(t)
+	restoreReq := runtimeRestoreRequest{
+		Env:   vmmSchema.Env{},
+		State: `{"format":"openclaw.runtime.v1","sessionId":"sess-restored-1"}`,
+	}
+	w := performJSONRequest(t, s, http.MethodPost, "/vmm/restore", restoreReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected restore status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	applyReq := vmdockerSchema.ApplyRequest{
+		From: "target-restored-openclaw",
+		Meta: vmmSchema.Meta{
+			Action:   "Execute",
+			Sequence: 13,
+		},
+		Params: map[string]string{
+			"Command":   "hello after restore",
+			"Reference": "13",
+		},
+	}
+	w = performJSONRequest(t, s, http.MethodPost, "/vmm/apply", applyReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected apply status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if createCalled {
+		t.Fatalf("did not expect sessions_create during restore flow")
+	}
+	if !sendCalled {
+		t.Fatalf("expected sessions_send to be called after restore")
+	}
+	if seenSessionKey != "sess-restored-1" {
+		t.Fatalf("expected restored session key sess-restored-1, got %q", seenSessionKey)
+	}
+}
+
+func TestRestoreOpenclawRejectsEmptyCheckpointState(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "data": "pong"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	t.Setenv("RUNTIME_TYPE", "openclaw")
+	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
+	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
+
+	s := setupTestServer(t)
+	restoreReq := runtimeRestoreRequest{
+		Env:   vmmSchema.Env{},
+		State: "",
+	}
+	w := performJSONRequest(t, s, http.MethodPost, "/vmm/restore", restoreReq)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected restore status 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

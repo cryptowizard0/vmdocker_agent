@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	schema "github.com/cryptowizard0/vmdocker_agent/runtime/openclaw/schema"
@@ -306,6 +307,93 @@ func TestApplyConfigAutoBaseHash(t *testing.T) {
 	}
 	if seenBaseHash != "cfg-hash-1" {
 		t.Fatalf("expected baseHash cfg-hash-1, got %q", seenBaseHash)
+	}
+}
+
+func TestNewRestoredUsesCheckpointSessionID(t *testing.T) {
+	createCalled := false
+	sendSessionKey := ""
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "data": "pong"})
+		case "/tools/invoke":
+			var req schema.ToolInvokeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode invoke request failed: %v", err)
+			}
+			switch req.Tool {
+			case DefaultToolCreateSession:
+				createCalled = true
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"status": "ok",
+					"data":   map[string]interface{}{"sessionId": "new-session"},
+				})
+			case DefaultToolSendSession:
+				sendSessionKey = req.SessionKey
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"status": "ok",
+					"data":   "restored-ok",
+				})
+			default:
+				http.Error(w, "unsupported tool", http.StatusBadRequest)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
+	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
+
+	rt, err := NewRestored(`{"format":"openclaw.runtime.v1","sessionId":"sess-restored-2"}`)
+	if err != nil {
+		t.Fatalf("new restored openclaw runtime failed: %v", err)
+	}
+	if rt.sessionID() != "sess-restored-2" {
+		t.Fatalf("expected restored session id sess-restored-2, got %q", rt.sessionID())
+	}
+
+	_, err = rt.Apply("target-1", vmmSchema.Meta{Action: "Execute", Sequence: 1}, map[string]string{
+		"Command": "run restored",
+	})
+	if err != nil {
+		t.Fatalf("apply after restore failed: %v", err)
+	}
+	if createCalled {
+		t.Fatalf("did not expect sessions_create during restored runtime init")
+	}
+	if sendSessionKey != "sess-restored-2" {
+		t.Fatalf("expected sessions_send to use restored session key, got %q", sendSessionKey)
+	}
+
+	checkpoint, err := rt.Checkpoint()
+	if err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	if !strings.Contains(checkpoint, `"sessionId":"sess-restored-2"`) {
+		t.Fatalf("expected checkpoint to include restored session id, got %s", checkpoint)
+	}
+}
+
+func TestNewRestoredRejectsEmptyCheckpointState(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "data": "pong"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
+	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
+
+	if _, err := NewRestored(""); err == nil {
+		t.Fatalf("expected empty checkpoint state to fail")
 	}
 }
 

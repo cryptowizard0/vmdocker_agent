@@ -19,6 +19,8 @@ func (s *Server) runAPI(endpoint string) {
 	engine := s.engine.Group("/vmm")
 	engine.POST("/health", s.health)
 	engine.POST("/apply", s.apply)
+	engine.POST("/checkpoint", s.checkpoint)
+	engine.POST("/restore", s.restore)
 	engine.POST("/spawn", s.spawn)
 
 	// disable MPTCP
@@ -130,6 +132,62 @@ func (s *Server) spawn(c *gin.Context) {
 	s.runtime = r
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
+	})
+}
+
+func (s *Server) checkpoint(c *gin.Context) {
+	if s.runtime == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status": "error",
+			"msg":    "runtime is nil",
+		})
+		return
+	}
+
+	state, err := s.runtime.Checkpoint()
+	if err != nil {
+		log.Error("checkpoint failed", "err", err)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("checkpoint failed: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, runtimeCheckpointResponse{
+		Status: "ok",
+		State:  state,
+	})
+}
+
+func (s *Server) restore(c *gin.Context) {
+	if s.runtime != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status": "error",
+			"msg":    "runtime is not nil",
+		})
+		return
+	}
+
+	var req runtimeRestoreRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	r, err := runtime.NewRestored(req.Env, "", s.aoPath, req.Tags, req.State)
+	if err != nil {
+		log.Error("restore runtime failed", "err", err)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("restore runtime failed: %v", err),
+		})
+		return
+	}
+
+	s.runtime = r
+	c.JSON(http.StatusOK, runtimeRestoreResponse{
+		Status: "ok",
 	})
 }
 
