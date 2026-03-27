@@ -36,6 +36,8 @@ The runtime behavior can be customized via environment variables.
 - `HOME`: Fallback home base. Runtime will use `<HOME>/.openclaw` when `OPENCLAW_STATE_DIR` and `OPENCLAW_HOME` are unset.
 - Runtime only falls back to `/tmp/.openclaw` when no usable home directory is available.
 - `OPENCLAW_CONFIG_PATH`: Optional override for the effective runtime config path. If unset, runtime uses `<state-dir>/openclaw.json`.
+- `OPENCLAW_DEFAULT_PROVIDER`: Optional managed default provider written into `agents.defaults.model.primary` together with `OPENCLAW_DEFAULT_MODEL`.
+- `OPENCLAW_DEFAULT_MODEL`: Optional managed default model name. If `OPENCLAW_DEFAULT_PROVIDER` is set, its prefix wins and rewrites any model prefix in this value.
 - `OPENCLAW_GATEWAY_MODE`: Optional gateway mode written into the effective config only when the config file is first materialized.
 - `OPENCLAW_GATEWAY_READY_WAIT_SECONDS`: Startup health-check timeout for the embedded gateway.
 - `NODE_DISABLE_COMPILE_CACHE`: Defaults to `1` in the sandbox image to avoid Node 22 compile-cache crashes during OpenClaw hot restarts after config changes such as Telegram setup.
@@ -287,7 +289,7 @@ Openclaw setup keys are now read from `Tags` (`Tag.Name` => key, `Tag.Value` => 
 
 Supported spawn tag keys (Openclaw):
 - `model` / `Model` / `modelName` / `ModelName`: initial model
-- `provider` / `Provider`: provider prefix helper for model composition
+- `provider` / `Provider`: first-class provider selector. When present, it wins and rewrites any model prefix before runtime setup.
 - `apiKey` / `ApiKey` / `APIKey` / `modelApiKey` / `ModelApiKey`: provider API key; runtime writes it into OpenClaw auth store (`auth-profiles.json`) as `<provider>:default`
 - `botToken`, `defaultAccount`, `dmPolicy`, `allowFrom`: initial Telegram patch fields
 
@@ -303,7 +305,8 @@ curl -sS -X POST http://127.0.0.1:8080/vmm/spawn \
     "CuAddr":"cu-1",
     "Evn":{},
     "Tags":[
-      {"name":"model","value":"kimi-coding/k2p5"},
+      {"name":"provider","value":"zen"},
+      {"name":"model","value":"plan"},
       {"name":"apiKey","value":"<YOUR_MODEL_API_KEY>"}
     ]
   }'
@@ -363,7 +366,10 @@ Action resolution notes:
   - fallback: `Meta.Data`
 - optional provider composition:
   - `Params.provider` / `Params.Provider`
-  - when both provider + model provided and model has no `/`, runtime sends `provider/model`
+  - when `provider` is set, runtime rewrites the model prefix to that provider
+  - examples:
+    - `provider=zen, model=plan` => `zen/plan`
+    - `provider=zen, model=kimi-coding/plan` => `zen/plan`
 
 `ConfigureTelegram`:
 - patch fields:

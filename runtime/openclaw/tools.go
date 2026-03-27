@@ -49,27 +49,27 @@ func newToolInvokeRequest(tool string, args map[string]interface{}, sessionKey s
 	return req
 }
 
-func extractModelName(meta vmmSchema.Meta, params map[string]string) string {
-	// Combine provider + model into provider/model when both provided
-	provider := strings.TrimSpace(params["provider"])
-	if provider == "" {
-		provider = strings.TrimSpace(params["Provider"])
+func normalizeProviderName(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func splitModelName(model string) (string, string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", ""
 	}
-	modelOnly := ""
+	parts := strings.SplitN(model, "/", 2)
+	if len(parts) != 2 {
+		return "", model
+	}
+	return normalizeProviderName(parts[0]), strings.TrimSpace(parts[1])
+}
+
+func extractModelInput(meta vmmSchema.Meta, params map[string]string) string {
 	for _, key := range []string{"model", "Model", "modelName", "ModelName"} {
 		if value := strings.TrimSpace(params[key]); value != "" {
-			modelOnly = value
-			break
+			return value
 		}
-	}
-	if provider != "" && modelOnly != "" {
-		if strings.Contains(modelOnly, "/") {
-			return modelOnly
-		}
-		return strings.ToLower(provider) + "/" + modelOnly
-	}
-	if modelOnly != "" {
-		return modelOnly
 	}
 	if value := strings.TrimSpace(meta.Data); value != "" {
 		return value
@@ -77,19 +77,38 @@ func extractModelName(meta vmmSchema.Meta, params map[string]string) string {
 	return ""
 }
 
+func extractModelName(meta vmmSchema.Meta, params map[string]string) string {
+	provider := extractProviderTagValue(params)
+	model := extractModelInput(meta, params)
+	if model == "" {
+		return ""
+	}
+	if provider == "" {
+		return strings.TrimSpace(model)
+	}
+	_, suffix := splitModelName(model)
+	if suffix == "" {
+		return provider
+	}
+	return provider + "/" + suffix
+}
+
 func extractProviderName(meta vmmSchema.Meta, params map[string]string) string {
+	provider := extractProviderTagValue(params)
+	if provider != "" {
+		return provider
+	}
+	model := extractModelName(meta, params)
+	modelProvider, _ := splitModelName(model)
+	return modelProvider
+}
+
+func extractProviderTagValue(params map[string]string) string {
 	provider := strings.TrimSpace(params["provider"])
 	if provider == "" {
 		provider = strings.TrimSpace(params["Provider"])
 	}
-	if provider != "" {
-		return strings.ToLower(provider)
-	}
-	model := extractModelName(meta, params)
-	if idx := strings.Index(model, "/"); idx > 0 {
-		return strings.ToLower(strings.TrimSpace(model[:idx]))
-	}
-	return ""
+	return normalizeProviderName(provider)
 }
 
 func extractModelAPIKey(params map[string]string) string {

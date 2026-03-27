@@ -32,6 +32,11 @@ type OpenclawPaths struct {
 	XDGStateHome   string
 }
 
+type OpenclawModelDefaults struct {
+	Provider string
+	Model    string
+}
+
 func ResolveOpenclawStateDir(lookup EnvLookup, userHomeDir UserHomeDirFunc) string {
 	if lookup == nil {
 		lookup = os.Getenv
@@ -99,6 +104,16 @@ func ResolveOpenclawPaths(lookup EnvLookup, userHomeDir UserHomeDirFunc) Opencla
 		XDGConfigHome:  xdgConfigHome,
 		XDGCacheHome:   xdgCacheHome,
 		XDGStateHome:   xdgStateHome,
+	}
+}
+
+func ResolveOpenclawModelDefaults(lookup EnvLookup) OpenclawModelDefaults {
+	if lookup == nil {
+		lookup = os.Getenv
+	}
+	return OpenclawModelDefaults{
+		Provider: strings.ToLower(strings.TrimSpace(lookup("OPENCLAW_DEFAULT_PROVIDER"))),
+		Model:    strings.TrimSpace(lookup("OPENCLAW_DEFAULT_MODEL")),
 	}
 }
 
@@ -206,7 +221,14 @@ func MaterializeOpenclawConfig(templatePath, targetPath, gatewayMode string) err
 }
 
 func ApplyManagedOpenclawConfig(targetPath string, paths OpenclawPaths) error {
-	if strings.TrimSpace(paths.AgentWorkspace) == "" && strings.TrimSpace(paths.LogDir) == "" {
+	return ApplyManagedOpenclawConfigWithDefaults(targetPath, paths, ResolveOpenclawModelDefaults(os.Getenv))
+}
+
+func ApplyManagedOpenclawConfigWithDefaults(targetPath string, paths OpenclawPaths, defaults OpenclawModelDefaults) error {
+	if strings.TrimSpace(paths.AgentWorkspace) == "" &&
+		strings.TrimSpace(paths.LogDir) == "" &&
+		strings.TrimSpace(defaults.Provider) == "" &&
+		strings.TrimSpace(defaults.Model) == "" {
 		return nil
 	}
 
@@ -226,6 +248,10 @@ func ApplyManagedOpenclawConfig(targetPath string, paths OpenclawPaths) error {
 		tools := ensureMap(cfg, "tools")
 		fs := ensureMap(tools, "fs")
 		fs["workspaceOnly"] = true
+	}
+	if normalizedModel := normalizeManagedPrimaryModel(defaults); normalizedModel != "" {
+		model := ensureMap(ensureMap(ensureMap(cfg, "agents"), "defaults"), "model")
+		model["primary"] = normalizedModel
 	}
 	if strings.TrimSpace(paths.LogDir) != "" {
 		logging := ensureMap(cfg, "logging")
@@ -249,6 +275,7 @@ func PrepareOpenclawRuntime(lookup EnvLookup, userHomeDir UserHomeDirFunc) (Open
 		lookup = os.Getenv
 	}
 	paths := ResolveOpenclawPaths(lookup, userHomeDir)
+	modelDefaults := ResolveOpenclawModelDefaults(lookup)
 	if err := EnsureRuntimeDirectories(paths); err != nil {
 		return OpenclawPaths{}, err
 	}
@@ -258,10 +285,29 @@ func PrepareOpenclawRuntime(lookup EnvLookup, userHomeDir UserHomeDirFunc) (Open
 	if err := MaterializeOpenclawConfig(paths.ConfigTemplate, paths.ConfigPath, strings.TrimSpace(lookup("OPENCLAW_GATEWAY_MODE"))); err != nil {
 		return OpenclawPaths{}, err
 	}
-	if err := ApplyManagedOpenclawConfig(paths.ConfigPath, paths); err != nil {
+	if err := ApplyManagedOpenclawConfigWithDefaults(paths.ConfigPath, paths, modelDefaults); err != nil {
 		return OpenclawPaths{}, err
 	}
 	return paths, nil
+}
+
+func normalizeManagedPrimaryModel(defaults OpenclawModelDefaults) string {
+	provider := strings.ToLower(strings.TrimSpace(defaults.Provider))
+	model := strings.TrimSpace(defaults.Model)
+	if provider == "" {
+		return model
+	}
+	if model == "" {
+		return ""
+	}
+	parts := strings.SplitN(model, "/", 2)
+	if len(parts) == 2 {
+		model = strings.TrimSpace(parts[1])
+	}
+	if model == "" {
+		return ""
+	}
+	return provider + "/" + model
 }
 
 func ensureMap(root map[string]interface{}, key string) map[string]interface{} {

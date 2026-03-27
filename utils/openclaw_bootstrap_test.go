@@ -86,6 +86,8 @@ func TestPrepareOpenclawRuntimeMaterializesConfigOnce(t *testing.T) {
 		"OPENCLAW_CONFIG_TEMPLATE_PATH": templatePath,
 		"OPENCLAW_CONFIG_PATH":          configPath,
 		"OPENCLAW_AGENT_WORKSPACE":      filepath.Join(tempDir, "state", ".workspace"),
+		"OPENCLAW_DEFAULT_PROVIDER":     "zen",
+		"OPENCLAW_DEFAULT_MODEL":        "kimi-coding/plan",
 		"OPENCLAW_GATEWAY_MODE":         "proxy",
 		"HOME":                          filepath.Join(tempDir, "home"),
 		"TMPDIR":                        filepath.Join(tempDir, "tmp"),
@@ -113,6 +115,7 @@ func TestPrepareOpenclawRuntimeMaterializesConfigOnce(t *testing.T) {
 	text := string(raw)
 	for _, snippet := range []string{
 		"\"mode\": \"proxy\"",
+		"\"primary\": \"zen/plan\"",
 		"\"workspace\": \"" + env["OPENCLAW_AGENT_WORKSPACE"] + "\"",
 		"\"workspaceOnly\": true",
 		"\"file\": \"" + filepath.Join(env["OPENCLAW_STATE_DIR"], "logs", "openclaw.log") + "\"",
@@ -138,6 +141,9 @@ func TestPrepareOpenclawRuntimeMaterializesConfigOnce(t *testing.T) {
 	text = string(raw)
 	if !strings.Contains(text, "\"mode\": \"custom\"") {
 		t.Fatalf("expected custom gateway mode to be preserved: %s", text)
+	}
+	if !strings.Contains(text, "\"primary\": \"zen/plan\"") {
+		t.Fatalf("expected managed primary model to persist: %s", text)
 	}
 	if !strings.Contains(text, "\"workspace\": \""+env["OPENCLAW_AGENT_WORKSPACE"]+"\"") {
 		t.Fatalf("expected managed workspace to persist: %s", text)
@@ -188,5 +194,73 @@ func TestPrepareOpenclawRuntimeMaterializesConfigOnce(t *testing.T) {
 		if got := info.Mode().Perm(); got != 0o777 {
 			t.Fatalf("runtime dir %q perm = %o, want 777", dir, got)
 		}
+	}
+}
+
+func TestResolveOpenclawModelDefaults(t *testing.T) {
+	defaults := ResolveOpenclawModelDefaults(func(key string) string {
+		switch key {
+		case "OPENCLAW_DEFAULT_PROVIDER":
+			return "Zen"
+		case "OPENCLAW_DEFAULT_MODEL":
+			return "kimi-coding/plan"
+		default:
+			return ""
+		}
+	})
+
+	if defaults.Provider != "zen" {
+		t.Fatalf("provider = %q, want zen", defaults.Provider)
+	}
+	if defaults.Model != "kimi-coding/plan" {
+		t.Fatalf("model = %q, want kimi-coding/plan", defaults.Model)
+	}
+}
+
+func TestNormalizeManagedPrimaryModel(t *testing.T) {
+	tests := []struct {
+		name     string
+		defaults OpenclawModelDefaults
+		want     string
+	}{
+		{
+			name: "provider prefixes plain model",
+			defaults: OpenclawModelDefaults{
+				Provider: "zen",
+				Model:    "plan",
+			},
+			want: "zen/plan",
+		},
+		{
+			name: "provider rewrites prefixed model",
+			defaults: OpenclawModelDefaults{
+				Provider: "zen",
+				Model:    "kimi-coding/plan",
+			},
+			want: "zen/plan",
+		},
+		{
+			name: "missing provider preserves model",
+			defaults: OpenclawModelDefaults{
+				Model: "kimi-coding/k2p5",
+			},
+			want: "kimi-coding/k2p5",
+		},
+		{
+			name: "missing model yields empty",
+			defaults: OpenclawModelDefaults{
+				Provider: "zen",
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeManagedPrimaryModel(tt.defaults)
+			if got != tt.want {
+				t.Fatalf("normalizeManagedPrimaryModel() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
