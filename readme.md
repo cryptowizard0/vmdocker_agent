@@ -26,6 +26,21 @@ The runtime behavior can be customized via environment variables.
 - `OPENCLAW_GATEWAY_URL`: Base URL for the Openclaw gateway (default: `http://127.0.0.1:18789`).
 - `OPENCLAW_GATEWAY_TOKEN`: Authentication token for the gateway (optional).
 - `OPENCLAW_TIMEOUT_MS`: Request timeout in milliseconds (default: `30000`).
+- `OPENCLAW_CONFIG_TEMPLATE_PATH`: Read-only template copied on first startup (default: `/app/openclaw.default.json`).
+
+### Runtime Bootstrap
+- `OPENCLAW_STATE_DIR`: Explicit writable state directory. Highest priority.
+- In both Docker and Docker Sandbox modes, `vmdocker` now resolves a per-instance workspace and points OpenClaw state into that mapped host directory.
+- `OPENCLAW_AGENT_WORKSPACE`: Optional override for OpenClaw's agent workspace. This should be set to a path inside the mapped runtime workspace, typically `<mapped>/.openclaw/workspace`.
+- `OPENCLAW_HOME`: Alternate home base. Runtime will use `<OPENCLAW_HOME>/.openclaw` when `OPENCLAW_STATE_DIR` is unset.
+- `HOME`: Fallback home base. Runtime will use `<HOME>/.openclaw` when `OPENCLAW_STATE_DIR` and `OPENCLAW_HOME` are unset.
+- Runtime only falls back to `/tmp/.openclaw` when no usable home directory is available.
+- `OPENCLAW_CONFIG_PATH`: Optional override for the effective runtime config path. If unset, runtime uses `<state-dir>/openclaw.json`.
+- `OPENCLAW_DEFAULT_PROVIDER`: Optional managed default provider written into `agents.defaults.model.primary` together with `OPENCLAW_DEFAULT_MODEL`.
+- `OPENCLAW_DEFAULT_MODEL`: Optional managed default model name. If `OPENCLAW_DEFAULT_PROVIDER` is set, its prefix wins and rewrites any model prefix in this value.
+- `OPENCLAW_GATEWAY_MODE`: Optional gateway mode written into the effective config only when the config file is first materialized.
+- `OPENCLAW_GATEWAY_READY_WAIT_SECONDS`: Startup health-check timeout for the embedded gateway.
+- `NODE_DISABLE_COMPILE_CACHE`: Defaults to `1` in the sandbox image to avoid Node 22 compile-cache crashes during OpenClaw hot restarts after config changes such as Telegram setup.
 
 ### Session Management
 - `OPENCLAW_SESSION_KEY`: Fallback session key if session creation fails (default: `main`).
@@ -54,39 +69,111 @@ Customize the API paths appended to the gateway base URL:
 - `OPENCLAW_ENDPOINT_CONFIGURE_MODEL`: Path for configure model action (default: `/tools/invoke`).
 - `OPENCLAW_ENDPOINT_CONFIGURE_TELEGRAM`: Path for configure telegram action (default: `/tools/invoke`).
 
-## 🐳 Quick Start with Docker
+## 🐳 OCI Image Workflow
 
 ### Prerequisites
 
 - Docker installed and running
 - Go 1.24+ (for local development)
 
-### Build Docker Image
+### Build OCI Image
 
 ```bash
-# Build image
 ./docker_build.sh <VERSION>
 ```
 
-**Parameters:**
 - `<VERSION>`: Image version tag (e.g., v1.0.0, latest, dev)
 
-**Examples:**
 ```bash
-# Build with specific version
 ./docker_build.sh v1.0.0
-
-# Build with latest tag
 ./docker_build.sh latest
 ```
 
-### Run Container
+### Run OCI Container
 
 ```bash
 ./docker_run.sh
 ```
 
-The container will start and expose the API on the configured port.
+The OCI image still exposes `/vmm/health`, `/vmm/spawn`, and `/vmm/apply` on port `8080`.
+
+## 🧪 Docker Sandbox Template Workflow
+
+This repository also ships a Docker Sandboxes template image for Docker Desktop 4.58+.
+
+Docker Sandbox exposes the primary workspace inside the sandbox at the same absolute path as on the host. Persistent OpenClaw state should therefore be configured through `OPENCLAW_STATE_DIR` based on that resolved host workspace path, rather than assuming a fixed in-sandbox mount like `/workspace`.
+
+For tighter workspace confinement, set `OPENCLAW_AGENT_WORKSPACE` inside the mapped directory as well. The runtime will then force `agents.defaults.workspace` to that path and enable `tools.fs.workspaceOnly=true`, so OpenClaw's own workspace files no longer fall back to `~/.openclaw/workspace`.
+
+The VMDocker runtime now standardizes the writable layout for both backends to:
+
+```text
+<workspace-root>/sandbox_workspace/<pid>
+```
+
+with these default paths inside that per-instance workspace:
+
+- `OPENCLAW_HOME=<workspace>`
+- `OPENCLAW_STATE_DIR=<workspace>/.openclaw`
+- `OPENCLAW_CONFIG_PATH=<workspace>/.openclaw/openclaw.json`
+- `OPENCLAW_AGENT_WORKSPACE=<workspace>/.openclaw/workspace`
+- `HOME=<workspace>/.home`
+- `TMPDIR=<workspace>/.tmp`
+- `XDG_CONFIG_HOME=<workspace>/.xdg/config`
+- `XDG_CACHE_HOME=<workspace>/.xdg/cache`
+- `XDG_STATE_HOME=<workspace>/.xdg/state`
+
+This is the contract a portable `vmdocker_agent` image should expect from `vmdocker`.
+
+Sandbox startup now runs a security audit before launching OpenClaw. The image treats passwordless `sudo` for `agent` as a fatal misconfiguration and refuses to start if it is still present. Platform-level exposures such as `docker.sock`, `virtiofs`, and missing AppArmor/SELinux visibility are logged as high-priority warnings but do not block startup, because they are controlled by Docker Sandbox rather than this image.
+
+Recommended deployment posture:
+- Do not treat Docker Sandbox alone as a hard trust boundary.
+- If your platform allows it, avoid exposing `/var/run/docker.sock` to untrusted sandboxes.
+- Limit the shared workspace path to the smallest host directory you actually need.
+
+### Build Sandbox Template
+
+```bash
+./docker_build_sandbox.sh <VERSION>
+```
+
+Example:
+
+```bash
+./docker_build_sandbox.sh latest
+```
+
+This step only builds the sandbox template image from [`Dockerfile.sandbox`](/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/Dockerfile.sandbox). It does not create or run a sandbox yet.
+
+### Create And Run Sandbox
+
+Use the helper script:
+
+```bash
+./docker_run_sandbox.sh
+```
+
+Or run the Docker Sandbox commands directly:
+
+```bash
+docker sandbox create --name hymatrix-openclaw-sandbox -t chriswebber/docker-openclaw-sandbox:latest shell /path/to/workspace
+docker sandbox run hymatrix-openclaw-sandbox
+```
+
+If you want Docker to create and run in one go, the CLI also supports:
+
+```bash
+docker sandbox run --name hymatrix-openclaw-sandbox -t chriswebber/docker-openclaw-sandbox:latest shell /path/to/workspace
+```
+
+After the sandbox is running, start the service inside it with:
+
+```bash
+docker sandbox exec hymatrix-openclaw-sandbox sh -lc 'start-vmdocker-agent.sh'
+```
+
+Cloud/provider usage is the only supported sandbox model path in this release. Docker Model Runner localhost bridging is intentionally out of scope for now.
 
 ## 🛠️ Local Development
 
@@ -101,6 +188,58 @@ go build -o vmdocker-container
 ./vmdocker-container
 ```
 
+### Generating A VMDocker Module
+
+`vmdocker_agent` now owns the module-generation flow for portable VMDocker modules.
+
+```bash
+go run ./cmd/module
+```
+
+The command automatically reads `/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/.env`.
+
+Fill the common entries there first:
+
+```dotenv
+VMDOCKER_URL=http://127.0.0.1:8080
+VMDOCKER_PRIVATE_KEY=
+```
+
+Then enable one generation mode in the same file:
+
+- Pull mode: `VMDOCKER_SANDBOX_IMAGE_NAME`, optional `VMDOCKER_SANDBOX_IMAGE_ID`
+- Build mode: `VMDOCKER_BUILD_DOCKERFILE`, `VMDOCKER_BUILD_CONTEXT_DIR`, `VMDOCKER_BUILD_TAG`
+
+The repository already includes a ready-to-fill `.env` template with all of these entries commented by mode.
+
+What `go run ./cmd/module` does now:
+
+1. Resolve the final local image using Pull mode or Build mode
+2. Export that image with `docker save`
+3. Compress the archive with `gzip`
+4. Store the compressed bytes in the generated module bundle `data`
+5. Write a local file `mod/mod-<module-id>.json`
+6. Print the generated module id and local file path
+
+The generated module is therefore self-contained for cold starts. If a VMDocker node later does not have the image locally, it can restore it from the module file instead of rebuilding it from a Dockerfile.
+
+The generated module does not pin a runtime backend anymore. Backend selection now happens at spawn time through the `Runtime-Backend` tag, with OS-specific defaults applied by `vmdocker` when the spawn request does not provide that tag.
+
+The generated module should carry the image startup contract through module tags:
+
+- `Start-Command=/usr/local/bin/start-vmdocker-agent.sh`
+- optional metadata such as `Sandbox-Agent` and `Openclaw-Version`
+
+Recommended split:
+
+- Module tags: describe the image, especially `Start-Command`
+- Spawn tags: choose the runtime, especially `Runtime-Backend`
+
+Current backend behavior:
+
+- `docker`: root filesystem is mounted read-only; writable runtime state lives in the mapped instance workspace
+- `sandbox`: VMDocker hardens common writable locations and keeps the mapped instance workspace as the intended writable area
+
 ### Testing
 
 ```bash
@@ -109,6 +248,12 @@ go test -v ./...
 
 # Run tests with coverage
 go test -v -cover ./...
+
+# OCI smoke test
+./scripts/docker_test_requests.sh
+
+# Sandbox smoke test
+./scripts/docker_test_sandbox.sh
 ```
 
 ## 📡 API Reference
@@ -144,9 +289,11 @@ Openclaw setup keys are now read from `Tags` (`Tag.Name` => key, `Tag.Value` => 
 
 Supported spawn tag keys (Openclaw):
 - `model` / `Model` / `modelName` / `ModelName`: initial model
-- `provider` / `Provider`: provider prefix helper for model composition
+- `provider` / `Provider`: first-class provider selector. When present, it wins and rewrites any model prefix before runtime setup.
 - `apiKey` / `ApiKey` / `APIKey` / `modelApiKey` / `ModelApiKey`: provider API key; runtime writes it into OpenClaw auth store (`auth-profiles.json`) as `<provider>:default`
 - `botToken`, `defaultAccount`, `dmPolicy`, `allowFrom`: initial Telegram patch fields
+
+If `apiKey` is omitted, the runtime does not fail fast. This is intentional for sandbox deployments that rely on externally injected provider credentials instead of local auth-store writes.
 
 Example:
 ```bash
@@ -158,7 +305,8 @@ curl -sS -X POST http://127.0.0.1:8080/vmm/spawn \
     "CuAddr":"cu-1",
     "Evn":{},
     "Tags":[
-      {"name":"model","value":"kimi-coding/k2p5"},
+      {"name":"provider","value":"zen"},
+      {"name":"model","value":"plan"},
       {"name":"apiKey","value":"<YOUR_MODEL_API_KEY>"}
     ]
   }'
@@ -218,7 +366,10 @@ Action resolution notes:
   - fallback: `Meta.Data`
 - optional provider composition:
   - `Params.provider` / `Params.Provider`
-  - when both provider + model provided and model has no `/`, runtime sends `provider/model`
+  - when `provider` is set, runtime rewrites the model prefix to that provider
+  - examples:
+    - `provider=zen, model=plan` => `zen/plan`
+    - `provider=zen, model=kimi-coding/plan` => `zen/plan`
 
 `ConfigureTelegram`:
 - patch fields:
@@ -360,7 +511,11 @@ For `Chat`, runtime additionally writes reply text to:
 ├── server/             # HTTP server implementation
 ├── utils/              # Helper utilities
 ├── Dockerfile          # Docker build file
+├── Dockerfile.sandbox  # Docker Sandboxes template build file
 ├── docker_build.sh     # Build script
+├── docker_build_sandbox.sh # Sandbox template build script
+├── docker_run_sandbox.sh # Sandbox create/run helper
+├── start-vmdocker-agent.sh # Shared bootstrap script for OCI/sandbox
 ├── docker_run.sh       # Run script
 └── main.go            # Application entry point
 ```

@@ -25,6 +25,17 @@ type Runtime struct {
 }
 
 func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag, spawnParams map[string]string) (*Runtime, error) {
+	return newRuntime(env, nodeAddr, aoDir, tags, spawnParams, "", false)
+}
+
+func NewRestored(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag, state string) (*Runtime, error) {
+	return newRuntime(env, nodeAddr, aoDir, tags, tagsToParams(tags), state, true)
+}
+
+func newRuntime(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag, spawnParams map[string]string, state string, restore bool) (*Runtime, error) {
+	_ = nodeAddr
+	_ = aoDir
+
 	var vm schema.IRuntime
 	var err error
 
@@ -38,7 +49,11 @@ func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag, spawn
 	case RuntimeTypeTest:
 		vm, err = testrt.NewRuntimeTest()
 	case RuntimeTypeOpenclaw:
-		vm, err = openclaw.NewWithParams(spawnParams)
+		if restore {
+			vm, err = openclaw.NewRestored(state)
+		} else {
+			vm, err = openclaw.NewWithParams(spawnParams)
+		}
 	default:
 		return nil, fmt.Errorf("runtime type not supported: %s", runtimeType)
 	}
@@ -48,6 +63,14 @@ func New(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag, spawn
 	}
 
 	return &Runtime{vm: vm}, nil
+}
+
+func tagsToParams(tags []goarSchema.Tag) map[string]string {
+	params := make(map[string]string, len(tags))
+	for _, tag := range tags {
+		params[tag.Name] = tag.Value
+	}
+	return params
 }
 
 func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]string) (string, error) {
@@ -61,4 +84,18 @@ func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]stri
 		return "", err
 	}
 	return string(outboxJson), nil
+}
+
+func (r *Runtime) Checkpoint() (string, error) {
+	if r == nil || r.vm == nil {
+		return "", fmt.Errorf("runtime is nil")
+	}
+	return r.vm.Checkpoint()
+}
+
+func (r *Runtime) Restore(data string) error {
+	if r == nil || r.vm == nil {
+		return fmt.Errorf("runtime is nil")
+	}
+	return r.vm.Restore(data)
 }

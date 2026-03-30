@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	schema "github.com/cryptowizard0/vmdocker_agent/runtime/openclaw/schema"
+	"github.com/cryptowizard0/vmdocker_agent/utils"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 )
 
@@ -81,24 +82,7 @@ func resolveAuthStorePath() string {
 	if p := strings.TrimSpace(os.Getenv("OPENCLAW_AUTH_STORE_PATH")); p != "" {
 		return p
 	}
-	stateDir := strings.TrimSpace(os.Getenv("OPENCLAW_STATE_DIR"))
-	if stateDir == "" {
-		stateDir = strings.TrimSpace(os.Getenv("OPENCLAW_HOME"))
-	}
-	if stateDir == "" {
-		home := strings.TrimSpace(os.Getenv("HOME"))
-		if home == "" {
-			if h, err := os.UserHomeDir(); err == nil {
-				home = strings.TrimSpace(h)
-			}
-		}
-		// Some runtimes report "/" as HOME; avoid writing under root.
-		if home == "" || home == "/" {
-			stateDir = "/tmp/.openclaw"
-		} else {
-			stateDir = filepath.Join(home, ".openclaw")
-		}
-	}
+	stateDir := utils.ResolveOpenclawStateDir(os.Getenv, os.UserHomeDir)
 	return filepath.Join(stateDir, "agents", "main", "agent", "auth-profiles.json")
 }
 

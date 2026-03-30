@@ -32,6 +32,8 @@ const (
 
 var log = common.NewLog("openclaw")
 
+const checkpointFormatV1 = "openclaw.runtime.v1"
+
 type Openclaw struct {
 	mu     sync.RWMutex
 	client GatewayClient
@@ -69,6 +71,32 @@ func New() (*Openclaw, error) {
 }
 
 func NewWithParams(spawnParams map[string]string) (*Openclaw, error) {
+	rt, err := newRuntimeWithGateway()
+	if err != nil {
+		return nil, err
+	}
+
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), rt.cfg.Timeout)
+	defer setupCancel()
+	if err := rt.SetupOnSpawn(setupCtx, spawnParams); err != nil {
+		return nil, err
+	}
+
+	return rt, nil
+}
+
+func NewRestored(state string) (*Openclaw, error) {
+	rt, err := newRuntimeWithGateway()
+	if err != nil {
+		return nil, err
+	}
+	if err := rt.Restore(state); err != nil {
+		return nil, err
+	}
+	return rt, nil
+}
+
+func newRuntimeWithGateway() (*Openclaw, error) {
 	cfg := LoadConfigFromEnv()
 	client := NewHTTPGatewayClient(cfg)
 
@@ -82,12 +110,6 @@ func NewWithParams(spawnParams map[string]string) (*Openclaw, error) {
 		client: client,
 		cfg:    cfg,
 		state:  schema.RuntimeState{},
-	}
-
-	setupCtx, setupCancel := context.WithTimeout(context.Background(), cfg.Timeout)
-	defer setupCancel()
-	if err := rt.SetupOnSpawn(setupCtx, spawnParams); err != nil {
-		return nil, err
 	}
 
 	return rt, nil
@@ -215,6 +237,14 @@ func (r *Openclaw) Apply(from string, meta vmmSchema.Meta, params map[string]str
 		}
 	}
 
+	output := interface{}(responseData)
+	if action == ActionChat {
+		output = map[string]interface{}{
+			"action": action,
+			"reply":  responseData,
+		}
+	}
+
 	result := vmmSchema.Result{
 		Messages: []*vmmSchema.ResMessage{
 			{
@@ -225,7 +255,8 @@ func (r *Openclaw) Apply(from string, meta vmmSchema.Meta, params map[string]str
 		},
 		Spawns:      []*vmmSchema.ResSpawn{},
 		Assignments: nil,
-		Output:      responseData,
+		Output:      output,
+		Data:        responseData,
 		Error:       nil,
 	}
 
@@ -259,6 +290,49 @@ func (r *Openclaw) closeSession(ctx context.Context) (*schema.GatewayResponse, s
 		responseData = "closed:" + sessionID
 	}
 	return resp, responseData, nil
+}
+
+type checkpointState struct {
+	Format    string `json:"format"`
+	SessionID string `json:"sessionId,omitempty"`
+}
+
+func (r *Openclaw) Checkpoint() (string, error) {
+	sessionID := strings.TrimSpace(r.sessionID())
+	if sessionID == "" {
+		return "", fmt.Errorf("openclaw checkpoint sessionId is empty")
+	}
+
+	payload, err := json.Marshal(checkpointState{
+		Format:    checkpointFormatV1,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal openclaw checkpoint failed: %w", err)
+	}
+	return string(payload), nil
+}
+
+func (r *Openclaw) Restore(data string) error {
+	if strings.TrimSpace(data) == "" {
+		return fmt.Errorf("openclaw checkpoint state is empty")
+	}
+
+	var state checkpointState
+	if err := json.Unmarshal([]byte(data), &state); err != nil {
+		return fmt.Errorf("decode openclaw checkpoint failed: %w", err)
+	}
+	if state.Format != "" && state.Format != checkpointFormatV1 {
+		return fmt.Errorf("unsupported openclaw checkpoint format: %s", state.Format)
+	}
+	if strings.TrimSpace(state.SessionID) == "" {
+		return fmt.Errorf("openclaw checkpoint sessionId is empty")
+	}
+
+	r.mu.Lock()
+	r.state.SessionID = strings.TrimSpace(state.SessionID)
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *Openclaw) sessionID() string {
