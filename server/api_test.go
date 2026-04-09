@@ -264,6 +264,83 @@ func TestSpawnAndApplyOpenclaw(t *testing.T) {
 	}
 }
 
+func TestSpawnAndApplyClaude(t *testing.T) {
+	workspace := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "claude.log")
+	cliPath := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\nprintf 'base=%s\n' \"$ANTHROPIC_BASE_URL\" >>" + shellQuote(logPath) + "\nprintf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"handled:claude\",\"session_id\":\"sess-claude-1\"}'\n"
+	if err := os.WriteFile(cliPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude failed: %v", err)
+	}
+
+	t.Setenv("RUNTIME_TYPE", "claude")
+	t.Setenv("CLAUDE_CODE_BIN", cliPath)
+	t.Setenv("VMDOCKER_AGENT_WORKSPACE", workspace)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://anthropic-proxy.example.com")
+
+	s := setupTestServer(t)
+
+	spawnReq := vmdockerSchema.SpawnRequest{
+		Pid:    "pid-claude",
+		Owner:  "owner-1",
+		CuAddr: "cu-1",
+		Data:   []byte{},
+		Tags:   nil,
+		Evn:    vmmSchema.Env{},
+	}
+	w := performJSONRequest(t, s, http.MethodPost, "/vmm/spawn", spawnReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected spawn status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	applyReq := vmdockerSchema.ApplyRequest{
+		From: "target-claude-1",
+		Meta: vmmSchema.Meta{
+			Action:   "Chat",
+			Sequence: 13,
+		},
+		Params: map[string]string{
+			"Command":   "hello",
+			"Reference": "13",
+		},
+	}
+	w = performJSONRequest(t, s, http.MethodPost, "/vmm/apply", applyReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected apply status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var res struct {
+		Status string `json:"status"`
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal apply response failed: %v", err)
+	}
+	if res.Status != "ok" {
+		t.Fatalf("expected status ok, got %q", res.Status)
+	}
+
+	var out vmmSchema.Result
+	if err := json.Unmarshal([]byte(res.Result), &out); err != nil {
+		t.Fatalf("unmarshal result payload failed: %v", err)
+	}
+	if out.Data != "handled:claude" {
+		t.Fatalf("expected result data handled:claude, got %q", out.Data)
+	}
+
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake claude log failed: %v", err)
+	}
+	if !strings.Contains(string(raw), "base=https://anthropic-proxy.example.com") {
+		t.Fatalf("expected ANTHROPIC_BASE_URL in log, got %s", string(raw))
+	}
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func TestRestoreAndApplyTestRuntime(t *testing.T) {
 	t.Setenv("RUNTIME_TYPE", "test")
 	s := setupTestServer(t)

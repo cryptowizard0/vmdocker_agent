@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/cryptowizard0/vmdocker_agent/common"
+	"github.com/cryptowizard0/vmdocker_agent/runtime/claudecode"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/openclaw"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/schema"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/testrt"
@@ -18,6 +19,7 @@ var log = common.NewLog("runtime")
 const (
 	RuntimeTypeTest     = "test"
 	RuntimeTypeOpenclaw = "openclaw"
+	RuntimeTypeClaude   = "claude"
 )
 
 type Runtime struct {
@@ -53,6 +55,12 @@ func newRuntime(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag
 			vm, err = openclaw.NewRestored(state)
 		} else {
 			vm, err = openclaw.NewWithParams(spawnParams)
+		}
+	case RuntimeTypeClaude:
+		if restore {
+			vm, err = claudecode.NewRestored(state, spawnParams)
+		} else {
+			vm, err = claudecode.NewWithParams(spawnParams)
 		}
 	default:
 		return nil, fmt.Errorf("runtime type not supported: %s", runtimeType)

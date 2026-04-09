@@ -200,6 +200,20 @@ print(f"[OK] {label}: reply captured")
 PY
 }
 
+assert_container_logs_contain() {
+  local container_name="$1"
+  local expected="$2"
+  local label="$3"
+  local logs
+  logs="$(docker logs "${container_name}" 2>&1 || true)"
+  if [[ "${logs}" != *"${expected}"* ]]; then
+    echo "[ERROR] ${label}: expected container logs to contain ${expected}"
+    printf '%s\n' "${logs}"
+    exit 1
+  fi
+  echo "[OK] ${label}: container logs contain ${expected}"
+}
+
 container_exists() {
   docker ps -a --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"
 }
@@ -293,6 +307,7 @@ fi
 echo "[OK] health response:"
 cat /tmp/vmdocker_health_resp.json
 assert_status_ok /tmp/vmdocker_health_resp.json "health"
+assert_container_logs_contain "${CONTAINER_NAME}" "[bootstrap][openclaw][info] openclaw gateway is ready" "openclaw bootstrap"
 
 SPAWN_PAYLOAD_JSON="$(python - <<'PY'
 import json, os
