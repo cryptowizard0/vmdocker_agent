@@ -112,14 +112,20 @@ func TestNewRuntimeClaude(t *testing.T) {
 	t.Setenv("RUNTIME_TYPE", RuntimeTypeClaude)
 	t.Setenv("CLAUDE_CODE_BIN", cliPath)
 	t.Setenv("VMDOCKER_AGENT_WORKSPACE", workspace)
+	t.Setenv("VMDOCKER_RUNTIME_HOME", workspace)
+	t.Setenv("ANTHROPIC_MODEL", "doubao-seed-code")
+	t.Setenv("ANTHROPIC_API_KEY", "163773a2-264a-46f3-ad7e-363656b7ec3c")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding")
+	t.Setenv("BOT_TOKEN", "8724356047:AAECGha-fS0zd4fi_3tNuoGORyatI112BAg")
 
-	rt, err := New(vmmSchema.Env{}, "", "", nil, map[string]string{"model": "claude-sonnet-4-5"})
+	rt, err := New(vmmSchema.Env{}, "", "", nil, map[string]string{"model": "qwen3.5-plus"})
 	if err != nil {
 		t.Fatalf("new runtime failed: %v", err)
 	}
 	if rt == nil || rt.vm == nil {
 		t.Fatalf("runtime vm is nil")
 	}
+	select {}
 }
 
 func TestNewRestoredRuntimeClaude(t *testing.T) {
