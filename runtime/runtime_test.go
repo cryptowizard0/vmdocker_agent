@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	schema "github.com/cryptowizard0/vmdocker_agent/runtime/openclaw/schema"
+	"github.com/cryptowizard0/vmdocker_agent/runtime/telegramcustomer"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 )
 
@@ -112,11 +113,7 @@ func TestNewRuntimeClaude(t *testing.T) {
 	t.Setenv("RUNTIME_TYPE", RuntimeTypeClaude)
 	t.Setenv("CLAUDE_CODE_BIN", cliPath)
 	t.Setenv("VMDOCKER_AGENT_WORKSPACE", workspace)
-	t.Setenv("VMDOCKER_RUNTIME_HOME", workspace)
-	t.Setenv("ANTHROPIC_MODEL", "doubao-seed-code")
-	t.Setenv("ANTHROPIC_API_KEY", "163773a2-264a-46f3-ad7e-363656b7ec3c")
-	t.Setenv("ANTHROPIC_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding")
-	t.Setenv("BOT_TOKEN", "8724356047:AAECGha-fS0zd4fi_3tNuoGORyatI112BAg")
+	t.Setenv("ANTHROPIC_MODEL", "test-model")
 
 	rt, err := New(vmmSchema.Env{}, "", "", nil, map[string]string{"model": "qwen3.5-plus"})
 	if err != nil {
@@ -125,7 +122,6 @@ func TestNewRuntimeClaude(t *testing.T) {
 	if rt == nil || rt.vm == nil {
 		t.Fatalf("runtime vm is nil")
 	}
-	select {}
 }
 
 func TestNewRestoredRuntimeClaude(t *testing.T) {
@@ -159,6 +155,55 @@ func TestNewRestoredRuntimeClaude(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "--resume runtime-restored-1") {
 		t.Fatalf("expected restored session id in log, got %s", string(raw))
+	}
+}
+
+func TestNewRuntimeTelegramCustomer(t *testing.T) {
+	workspace := t.TempDir()
+	homeDir := t.TempDir()
+	cliPath := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\nexit 0\n"
+	if err := os.WriteFile(cliPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude failed: %v", err)
+	}
+
+	originalRunByHymx := telegramcustomer.RunByHymx
+	telegramcustomer.RunByHymx = func(workspaceDir, runtimeHomeDir, botToken string) error {
+		if workspaceDir != workspace {
+			t.Fatalf("expected workspace %q, got %q", workspace, workspaceDir)
+		}
+		if runtimeHomeDir != homeDir {
+			t.Fatalf("expected runtime home %q, got %q", homeDir, runtimeHomeDir)
+		}
+		if botToken != "bot-token" {
+			t.Fatalf("expected bot token to be forwarded")
+		}
+		return nil
+	}
+	defer func() {
+		telegramcustomer.RunByHymx = originalRunByHymx
+	}()
+
+	t.Setenv("RUNTIME_TYPE", RuntimeTypeTelegramCustomer)
+	t.Setenv("CLAUDE_CODE_BIN", cliPath)
+	t.Setenv("VMDOCKER_AGENT_WORKSPACE", workspace)
+	t.Setenv("VMDOCKER_RUNTIME_HOME", homeDir)
+	t.Setenv("BOT_TOKEN", "bot-token")
+
+	rt, err := New(vmmSchema.Env{}, "", "", nil, map[string]string{"model": "qwen3.5-plus"})
+	if err != nil {
+		t.Fatalf("new telegramcustomer runtime failed: %v", err)
+	}
+	if rt == nil || rt.vm == nil {
+		t.Fatalf("runtime vm is nil")
+	}
+
+	state, err := rt.Checkpoint()
+	if err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
+	}
+	if !strings.Contains(state, "telegramcustomer.runtime.v1") {
+		t.Fatalf("expected telegramcustomer checkpoint format, got %s", state)
 	}
 }
 

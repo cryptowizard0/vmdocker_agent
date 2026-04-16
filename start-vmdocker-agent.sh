@@ -150,7 +150,7 @@ health_probe() {
 
 validate_runtime_type() {
     case "$1" in
-        openclaw|claude|test)
+        openclaw|claude|telegramcustomer|test)
             return 0
             ;;
         *)

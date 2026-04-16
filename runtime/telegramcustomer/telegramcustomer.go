@@ -18,13 +18,13 @@ import (
 )
 
 const (
-	checkpointFormatV1  = "claudecode.runtime.v1"
+	checkpointFormatV1  = "telegramcustomer.runtime.v1"
 	defaultTimeout      = 10 * time.Minute
 	defaultClaudeBinary = "claude"
-	maxApplyAttempts    = 2
 )
 
 var log = common.NewLog("tgcustomer")
+var RunByHymx = customer.RunByHymx
 
 type Config struct {
 	Binary   string
@@ -59,16 +59,17 @@ func NewWithParams(spawnParams map[string]string) (*Runtime, error) {
 	homeDir := strings.TrimSpace(os.Getenv("VMDOCKER_RUNTIME_HOME"))
 	homeDir, _ = filepath.Abs(homeDir)
 
-	if err = customer.RunByHymx(cfg.Cwd, homeDir, cfg.BotToken); err != nil {
+	if err = RunByHymx(cfg.Cwd, homeDir, cfg.BotToken); err != nil {
 		return nil, err
 	}
 	return &Runtime{
 		config: cfg,
 		state: checkpointState{
-			Format:  checkpointFormatV1,
-			Cwd:     cfg.Cwd,
-			Model:   cfg.Model,
-			BaseURL: cfg.BaseURL,
+			Format:    checkpointFormatV1,
+			SessionID: newSessionID(),
+			Cwd:       cfg.Cwd,
+			Model:     cfg.Model,
+			BaseURL:   cfg.BaseURL,
 		},
 	}, nil
 }
@@ -94,7 +95,7 @@ func NewRestored(state string, spawnParams map[string]string) (*Runtime, error) 
 	homeDir := strings.TrimSpace(os.Getenv("VMDOCKER_RUNTIME_HOME"))
 	homeDir, _ = filepath.Abs(homeDir)
 
-	if err = customer.RunByHymx(cfg.Cwd, homeDir, cfg.BotToken); err != nil {
+	if err = RunByHymx(cfg.Cwd, homeDir, cfg.BotToken); err != nil {
 		return nil, err
 	}
 	return rt, nil
@@ -141,6 +142,14 @@ func loadConfig(spawnParams map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
+	botToken := strings.TrimSpace(os.Getenv("BOT_TOKEN"))
+	if botToken == "" {
+		botToken = extractBotToken(spawnParams)
+	}
+	if botToken == "" {
+		return Config{}, fmt.Errorf("BOT_TOKEN is required, set via BOT_TOKEN env or botToken tag")
+	}
+
 	return Config{
 		Binary:   binary,
 		APIKey:   strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
@@ -149,7 +158,7 @@ func loadConfig(spawnParams map[string]string) (Config, error) {
 		Flags:    flags,
 		Cwd:      cwd,
 		Timeout:  resolveTimeout(),
-		BotToken: strings.TrimSpace(os.Getenv("BOT_TOKEN")),
+		BotToken: botToken,
 	}, nil
 }
 
@@ -228,8 +237,20 @@ func extractModelName(params map[string]string) string {
 	return ""
 }
 
+func extractBotToken(params map[string]string) string {
+	if params == nil {
+		return ""
+	}
+	for _, key := range []string{"botToken", "BotToken", "bot_token"} {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]string) (vmmSchema.Result, error) {
-	return vmmSchema.Result{}, nil
+	return vmmSchema.Result{}, fmt.Errorf("telegramcustomer apply is not implemented")
 }
 
 func (r *Runtime) Checkpoint() (string, error) {
@@ -240,22 +261,22 @@ func (r *Runtime) Checkpoint() (string, error) {
 
 	payload, err := json.Marshal(state)
 	if err != nil {
-		return "", fmt.Errorf("marshal claude checkpoint failed: %w", err)
+		return "", fmt.Errorf("marshal telegramcustomer checkpoint failed: %w", err)
 	}
 	return string(payload), nil
 }
 
 func (r *Runtime) Restore(data string) error {
 	if strings.TrimSpace(data) == "" {
-		return fmt.Errorf("claude checkpoint state is empty")
+		return fmt.Errorf("telegramcustomer checkpoint state is empty")
 	}
 
 	var state checkpointState
 	if err := json.Unmarshal([]byte(data), &state); err != nil {
-		return fmt.Errorf("decode claude checkpoint failed: %w", err)
+		return fmt.Errorf("decode telegramcustomer checkpoint failed: %w", err)
 	}
 	if state.Format != "" && state.Format != checkpointFormatV1 {
-		return fmt.Errorf("unsupported claude checkpoint format: %s", state.Format)
+		return fmt.Errorf("unsupported telegramcustomer checkpoint format: %s", state.Format)
 	}
 
 	r.mu.Lock()
@@ -279,4 +300,8 @@ func (r *Runtime) Restore(data string) error {
 		r.state.BaseURL = strings.TrimSpace(state.BaseURL)
 	}
 	return nil
+}
+
+func newSessionID() string {
+	return fmt.Sprintf("telegramcustomer-%d", time.Now().UnixNano())
 }

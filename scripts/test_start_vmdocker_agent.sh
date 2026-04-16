@@ -40,6 +40,15 @@ bootstrap_claude_main "$@"
 EOF
 chmod +x "${HOOKS_DIR}/claude.sh"
 
+cat > "${HOOKS_DIR}/telegramcustomer.sh" <<'EOF'
+#!/bin/sh
+bootstrap_telegramcustomer_main() {
+    printf 'hook:telegramcustomer\n' >> "${TRACE_FILE}"
+}
+bootstrap_telegramcustomer_main "$@"
+EOF
+chmod +x "${HOOKS_DIR}/telegramcustomer.sh"
+
 assert_contains() {
   local file="$1"
   local expected="$2"
@@ -79,6 +88,13 @@ run_entrypoint claude
 assert_contains "${TRACE_FILE}" "hook:claude"
 assert_contains "${TRACE_FILE}" "main:claude"
 assert_not_contains "${TRACE_FILE}" "hook:openclaw"
+
+: > "${TRACE_FILE}"
+run_entrypoint telegramcustomer
+assert_contains "${TRACE_FILE}" "hook:telegramcustomer"
+assert_contains "${TRACE_FILE}" "main:telegramcustomer"
+assert_not_contains "${TRACE_FILE}" "hook:openclaw"
+assert_not_contains "${TRACE_FILE}" "hook:claude"
 
 : > "${TRACE_FILE}"
 run_entrypoint test
