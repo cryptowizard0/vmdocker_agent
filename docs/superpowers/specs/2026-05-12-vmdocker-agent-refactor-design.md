@@ -88,13 +88,15 @@ Agent 扩展拆成两层：
 ```toml
 name = "claude"
 backend = "claude"
-role = "harness/roles/claude.md"
+asset_root = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent"
+role = "roles/claude.md"
 
 [paths]
 workspace = "${VMDOCKER_AGENT_WORKSPACE}"
 home = "${VMDOCKER_RUNTIME_HOME}"
-context = ".harness/context"
-memory = ".harness/memory"
+context = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/context"
+memory = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/memory"
+skills = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/skills"
 
 [skills]
 include = ["codex-basic", "hymx-runtime"]
@@ -127,24 +129,40 @@ test -> test
 4. 校验并安装 profile include 的 skills。
 5. 暴露 role、skills、context、memory 相关路径给 backend。
 
-推荐镜像内 harness 资源目录：
+Harness 路径必须服从 vmdocker 注入的 runtime workspace env。`vmdocker/vmdocker/runtimemanager/env.go` 已定义每个实例的 workspace 布局：
+
+- `VMDOCKER_RUNTIME_WORKSPACE=<workspace>`
+- `VMDOCKER_AGENT_WORKSPACE=<workspace>/workspace`
+- `VMDOCKER_RUNTIME_HOME=<workspace>/.home`
+- `HOME=<workspace>/.home`
+- `TMPDIR=<workspace>/.tmp`
+- `XDG_CONFIG_HOME=<workspace>/.xdg/config`
+- `XDG_CACHE_HOME=<workspace>/.xdg/cache`
+- `XDG_STATE_HOME=<workspace>/.xdg/state`
+
+因此 harness 资源目录也统一落在 `VMDOCKER_RUNTIME_WORKSPACE` 下，而不是镜像内系统路径：
 
 ```text
-/usr/local/share/vmdocker-agent/
+${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/
   profiles/
   skills/
   roles/
+  context/
+  memory/
+  bootstrap/
+  bin/
 ```
 
 推荐运行时环境变量：
 
 ```text
 VMDOCKER_AGENT_PROFILE
-VMDOCKER_AGENT_PROFILE_DIR
-VMDOCKER_AGENT_SKILLS_DIR
-VMDOCKER_AGENT_ROLE_PATH
-VMDOCKER_AGENT_CONTEXT_DIR
-VMDOCKER_AGENT_MEMORY_DIR
+VMDOCKER_AGENT_ASSET_ROOT=${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent
+VMDOCKER_AGENT_PROFILE_DIR=${VMDOCKER_AGENT_ASSET_ROOT}/profiles
+VMDOCKER_AGENT_SKILLS_DIR=${VMDOCKER_AGENT_ASSET_ROOT}/skills
+VMDOCKER_AGENT_ROLE_PATH=${VMDOCKER_AGENT_ASSET_ROOT}/roles/<profile>.md
+VMDOCKER_AGENT_CONTEXT_DIR=${VMDOCKER_AGENT_ASSET_ROOT}/context
+VMDOCKER_AGENT_MEMORY_DIR=${VMDOCKER_AGENT_ASSET_ROOT}/memory
 ```
 
 Skill 采用全局池：
@@ -221,7 +239,7 @@ name = "claude"
 runtime_profile = "claude"
 dockerfile = "build/docker/Dockerfile.claude"
 image_name = "chriswebber/docker-claude"
-start_command = "/usr/local/bin/start-vmdocker-agent.sh"
+start_command = "sh -lc 'exec \"$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent/bin/start-vmdocker-agent.sh\"'"
 
 [assets]
 profiles = ["claude"]
@@ -235,7 +253,7 @@ RUNTIME_TYPE = "claude"
 
 [module_tags]
 Sandbox-Agent = "shell"
-Start-Command = "/usr/local/bin/start-vmdocker-agent.sh"
+Start-Command = "sh -lc 'exec \"$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent/bin/start-vmdocker-agent.sh\"'"
 ```
 
 构建入口采用 `cmd/build` 作为事实入口，`build/scripts/build.sh` 和现有 `docker_build_*.sh` 只作为 thin wrapper。第一阶段要求：
@@ -243,22 +261,25 @@ Start-Command = "/usr/local/bin/start-vmdocker-agent.sh"
 1. 校验 build profile 和 runtime profile。
 2. 校验 assets 引用存在。
 3. 准备临时 build context。
-4. 复制 `/app/main`、entrypoint、bootstrap、profiles、skills、roles。
+4. 将 entrypoint、bootstrap、profiles、skills、roles 和需要暴露给 Agent 的辅助文件打包为 workspace materialization plan。
 5. 构建 Docker image。
 6. 复用或扩展 `modulegen` 输出 module artifact。
 
 现有 `docker_build_claude.sh`、`docker_build_openclaw.sh`、`docker_build_telegramcustomer.sh` 第一阶段保留，逐步改为调用新 build 入口。
 
-标准镜像契约：
+标准 runtime workspace 契约：
 
 ```text
-/app/main
-/usr/local/bin/start-vmdocker-agent.sh
-/usr/local/lib/vmdocker-agent/bootstrap/*.sh
-/usr/local/share/vmdocker-agent/profiles/
-/usr/local/share/vmdocker-agent/skills/
-/usr/local/share/vmdocker-agent/roles/
+${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/bin/start-vmdocker-agent.sh
+${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/bootstrap/*.sh
+${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/profiles/
+${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/skills/
+${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/roles/
+${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/context/
+${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/memory/
 ```
+
+镜像可以有内部实现路径，但这些路径不是 Agent/harness 的外部契约。Agent 可见、可依赖的路径必须通过 vmdocker 注入的 env 解析到 runtime workspace 下。build 产物需要保证容器启动时在 `VMDOCKER_RUNTIME_WORKSPACE` 内完成 harness assets materialization，然后再启动 agent 服务。
 
 ## 第一阶段迁移范围
 
