@@ -268,6 +268,9 @@ func TestNewRuntimeFallsBackToRuntimeTypeClaude(t *testing.T) {
 }
 
 func TestApplyHarnessEnvDoesNotMutateSelectorEnv(t *testing.T) {
+	for _, key := range harnessEnvKeys {
+		t.Setenv(key, "")
+	}
 	t.Setenv("VMDOCKER_AGENT_PROFILE", "")
 	t.Setenv("VMDOCKER_AGENT_PROFILE_DIR", "/caller/profile-dir")
 	t.Setenv("RUNTIME_TYPE", RuntimeTypeClaude)
