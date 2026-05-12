@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,6 +18,8 @@ func TestResolveSelectorPrefersAgentProfile(t *testing.T) {
 }
 
 func TestResolveSelectorMapsRuntimeType(t *testing.T) {
+	t.Setenv(EnvAgentProfile, "")
+
 	tests := map[string]string{
 		"claude":           "claude",
 		"openclaw":         "openclaw-legacy",
@@ -36,6 +39,9 @@ func TestResolveSelectorMapsRuntimeType(t *testing.T) {
 }
 
 func TestResolveSelectorDefaultsToOpenclawLegacy(t *testing.T) {
+	t.Setenv(EnvAgentProfile, "")
+	t.Setenv(EnvRuntimeType, "")
+
 	got := ResolveSelector(os.Getenv)
 	if got != "openclaw-legacy" {
 		t.Fatalf("selector = %q, want openclaw-legacy", got)
@@ -95,4 +101,46 @@ func TestLoadRejectsInvalidProfile(t *testing.T) {
 	if _, err := Load(root, "bad"); err == nil {
 		t.Fatalf("expected invalid profile error")
 	}
+}
+
+func TestLoadRejectsUnsafeProfileName(t *testing.T) {
+	root := t.TempDir()
+	escapeDir := filepath.Join(root, "..", "escape")
+	if err := os.MkdirAll(escapeDir, 0o755); err != nil {
+		t.Fatalf("mkdir escape dir failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(escapeDir, "profile.toml"), validProfile("escape"), 0o644); err != nil {
+		t.Fatalf("write escape profile failed: %v", err)
+	}
+
+	tests := []string{
+		"../escape",
+		filepath.Join(string(filepath.Separator), "absolute"),
+	}
+
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(root, name)
+			if err == nil {
+				t.Fatalf("expected unsafe profile name error")
+			}
+			if errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("Load returned filesystem error %v, want unsafe name rejection", err)
+			}
+		})
+	}
+}
+
+func validProfile(name string) []byte {
+	return []byte(`name = "` + name + `"
+backend = "` + name + `"
+asset_root = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent"
+
+[paths]
+workspace = "${VMDOCKER_AGENT_WORKSPACE}"
+home = "${VMDOCKER_RUNTIME_HOME}"
+context = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/context"
+memory = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/memory"
+skills = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/skills"
+`)
 }

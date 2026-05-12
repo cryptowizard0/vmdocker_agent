@@ -80,8 +80,8 @@ func ResolveProfileDir(lookup EnvLookup) string {
 
 func Load(root, name string) (Profile, error) {
 	name = strings.TrimSpace(name)
-	if name == "" {
-		return Profile{}, fmt.Errorf("profile name is empty")
+	if err := validateProfileName(name); err != nil {
+		return Profile{}, err
 	}
 	path := filepath.Join(root, name, "profile.toml")
 	data, err := os.ReadFile(path)
@@ -97,6 +97,17 @@ func Load(root, name string) (Profile, error) {
 		return Profile{}, fmt.Errorf("invalid profile %s: %w", path, err)
 	}
 	return prof, nil
+}
+
+func validateProfileName(name string) error {
+	if name == "" {
+		return fmt.Errorf("profile name is empty")
+	}
+	if filepath.IsAbs(name) || name == ".." || strings.Contains(name, ".."+string(filepath.Separator)) ||
+		strings.Contains(name, "/") || strings.ContainsRune(name, filepath.Separator) {
+		return fmt.Errorf("profile name %q is unsafe", name)
+	}
+	return nil
 }
 
 func (p Profile) Validate() error {
