@@ -58,7 +58,10 @@ func Init(prof profile.Profile, lookup EnvLookup) (Context, error) {
 		}
 	}
 
-	rolePath := resolveRolePath(assetRoot, expand(prof.Role, lookup))
+	rolePath, err := resolveRolePath(assetRoot, expand(prof.Role, lookup))
+	if err != nil {
+		return Context{}, err
+	}
 	env := make(map[string]string, len(prof.Env)+7)
 	for key, value := range prof.Env {
 		env[key] = expand(value, lookup)
@@ -89,6 +92,9 @@ func Init(prof profile.Profile, lookup EnvLookup) (Context, error) {
 		if skill == "" {
 			continue
 		}
+		if err := validateSkillName(skill); err != nil {
+			return Context{}, err
+		}
 		skillDir := filepath.Join(skillsDir, skill)
 		if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
 			if os.IsNotExist(err) {
@@ -103,11 +109,11 @@ func Init(prof profile.Profile, lookup EnvLookup) (Context, error) {
 }
 
 func runtimeWorkspace(lookup EnvLookup) string {
-	if runtimeRoot := strings.TrimSpace(lookup(envRuntimeWorkspace)); runtimeRoot != "" {
+	if runtimeRoot := cleanRuntimeRoot(lookup(envRuntimeWorkspace)); runtimeRoot != "" {
 		return runtimeRoot
 	}
-	if agentWorkspace := strings.TrimSpace(lookup(envAgentWorkspace)); agentWorkspace != "" {
-		return filepath.Dir(agentWorkspace)
+	if agentWorkspace := cleanRuntimeRoot(filepath.Dir(strings.TrimSpace(lookup(envAgentWorkspace)))); agentWorkspace != "" {
+		return agentWorkspace
 	}
 	return "."
 }
@@ -128,15 +134,57 @@ func normalizeAssetChild(path, runtimeRoot, name string) string {
 	return path
 }
 
-func resolveRolePath(assetRoot, role string) string {
-	if filepath.IsAbs(role) {
-		return role
+func resolveRolePath(assetRoot, role string) (string, error) {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return "", nil
 	}
-	return filepath.Join(assetRoot, role)
+	if filepath.IsAbs(role) {
+		return "", fmt.Errorf("invalid role path %q: absolute paths are not allowed", role)
+	}
+	cleanRole := filepath.Clean(role)
+	if cleanRole == "." || cleanRole == ".." || strings.HasPrefix(cleanRole, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid role path %q: traversal is not allowed", role)
+	}
+	rolePath := filepath.Join(assetRoot, cleanRole)
+	if !pathWithin(assetRoot, rolePath) {
+		return "", fmt.Errorf("invalid role path %q: resolved path escapes asset root", role)
+	}
+	return rolePath, nil
 }
 
 func expand(value string, lookup EnvLookup) string {
 	return os.Expand(value, func(name string) string {
 		return lookup(name)
 	})
+}
+
+func cleanRuntimeRoot(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	cleanPath := filepath.Clean(path)
+	if cleanPath == string(filepath.Separator) {
+		return ""
+	}
+	return cleanPath
+}
+
+func validateSkillName(skill string) error {
+	if filepath.IsAbs(skill) || skill == "." || skill == ".." ||
+		strings.ContainsRune(skill, filepath.Separator) ||
+		strings.Contains(skill, "/") ||
+		strings.Contains(skill, `\`) {
+		return fmt.Errorf("invalid skill %q: skill names must not contain path traversal or separators", skill)
+	}
+	return nil
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
