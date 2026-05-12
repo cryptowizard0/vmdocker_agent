@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE_NAME="${IMAGE_NAME:-chriswebber/docker-openclaw-sandbox:latest}"
+IMAGE_NAME="${IMAGE_NAME:-chriswebber/docker-openclaw:latest}"
 SANDBOX_NAME="${SANDBOX_NAME:-hymatrix-openclaw-sandbox-test}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-$PWD}"
 WAIT_SECONDS="${WAIT_SECONDS:-60}"
@@ -49,6 +49,32 @@ print("[OK] apply: result data=test-runtime-ok")
 PY
 }
 
+assert_sandbox_log_contains() {
+  local expected="$1"
+  local label="$2"
+  local logs
+  logs="$(docker sandbox exec "${SANDBOX_NAME}" sh -lc "cat /tmp/vmdocker-agent.log" 2>/dev/null || true)"
+  if [[ "${logs}" != *"${expected}"* ]]; then
+    echo "[ERROR] ${label}: expected sandbox log to contain ${expected}"
+    printf '%s\n' "${logs}"
+    exit 1
+  fi
+  echo "[OK] ${label}: sandbox log contains ${expected}"
+}
+
+assert_sandbox_log_not_contains() {
+  local unexpected="$1"
+  local label="$2"
+  local logs
+  logs="$(docker sandbox exec "${SANDBOX_NAME}" sh -lc "cat /tmp/vmdocker-agent.log" 2>/dev/null || true)"
+  if [[ "${logs}" == *"${unexpected}"* ]]; then
+    echo "[ERROR] ${label}: did not expect sandbox log to contain ${unexpected}"
+    printf '%s\n' "${logs}"
+    exit 1
+  fi
+  echo "[OK] ${label}: sandbox log does not contain ${unexpected}"
+}
+
 echo "[INFO] removing any existing sandbox with the same name"
 docker sandbox stop "${SANDBOX_NAME}" >/dev/null 2>&1 || true
 docker sandbox rm "${SANDBOX_NAME}" >/dev/null 2>&1 || true
@@ -90,6 +116,13 @@ until docker sandbox exec "${SANDBOX_NAME}" sh -lc "curl -fsS -X POST http://127
   fi
   sleep 1
 done
+
+if [[ "${RUNTIME_TYPE}" == "claude" ]]; then
+  assert_sandbox_log_contains "[bootstrap][claude][info] claude runtime bootstrap ready" "claude bootstrap"
+  assert_sandbox_log_not_contains "[bootstrap][openclaw][info] starting openclaw gateway" "claude bootstrap isolation"
+  echo "[OK] sandbox smoke test passed for Claude startup"
+  exit 0
+fi
 
 echo "[INFO] calling /vmm/spawn"
 spawn_payload="$(docker sandbox exec "${SANDBOX_NAME}" sh -lc "curl -fsS -X POST http://127.0.0.1:8080/vmm/spawn \

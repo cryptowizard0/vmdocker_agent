@@ -2,19 +2,57 @@
 set -eu
 
 APP_ROOT="${VMDOCKER_AGENT_APP_ROOT:-/app}"
+BOOTSTRAP_DIR="${VMDOCKER_AGENT_BOOTSTRAP_DIR:-/usr/local/lib/vmdocker-agent/bootstrap}"
+BACKGROUND_PIDS=""
 
-audit_info() {
-    echo "[security][info] $*" >&2
+entry_info() {
+    echo "[entrypoint][info] $*" >&2
 }
 
-audit_warn() {
-    echo "[security][warn] $*" >&2
+entry_warn() {
+    echo "[entrypoint][warn] $*" >&2
 }
 
-audit_fail() {
-    echo "[security][fatal] $*" >&2
+entry_fail() {
+    echo "[entrypoint][fatal] $*" >&2
     exit 1
 }
+
+bootstrap_info() {
+    runtime="${BOOTSTRAP_RUNTIME:-unknown}"
+    echo "[bootstrap][${runtime}][info] $*" >&2
+}
+
+bootstrap_warn() {
+    runtime="${BOOTSTRAP_RUNTIME:-unknown}"
+    echo "[bootstrap][${runtime}][warn] $*" >&2
+}
+
+bootstrap_fail() {
+    runtime="${BOOTSTRAP_RUNTIME:-unknown}"
+    echo "[bootstrap][${runtime}][fatal] $*" >&2
+    exit 1
+}
+
+register_background_pid() {
+    pid="$1"
+    if [ -z "${pid}" ]; then
+        return 0
+    fi
+    if [ -z "${BACKGROUND_PIDS}" ]; then
+        BACKGROUND_PIDS="${pid}"
+    else
+        BACKGROUND_PIDS="${BACKGROUND_PIDS} ${pid}"
+    fi
+}
+
+cleanup_background_pids() {
+    for pid in ${BACKGROUND_PIDS}; do
+        kill "${pid}" 2>/dev/null || true
+    done
+}
+
+trap cleanup_background_pids EXIT INT TERM
 
 audit_mount_fstype() {
     target="$1"
@@ -27,45 +65,60 @@ audit_mount_fstype() {
     fi
 }
 
+resolve_workspace_root() {
+    for candidate in \
+        "${WORKSPACE_DIR:-}" \
+        "${VMDOCKER_RUNTIME_WORKSPACE:-}" \
+        "${VMDOCKER_AGENT_WORKSPACE:-}" \
+        "${OPENCLAW_HOME:-}"
+    do
+        if [ -n "${candidate}" ] && [ -d "${candidate}" ]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 run_security_audit() {
-    audit_info "running startup security audit"
+    entry_info "running startup security audit"
 
     if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-        audit_fail "passwordless sudo is still available for user $(id -un); this is an image misconfiguration"
+        entry_fail "passwordless sudo is still available for user $(id -un); this is an image misconfiguration"
     fi
-    audit_info "sudo escalation check passed"
+    entry_info "sudo escalation check passed"
 
     if [ -S /var/run/docker.sock ]; then
-        audit_warn "docker.sock is exposed inside the sandbox; this comes from the Docker Sandbox platform, not this image"
+        entry_warn "docker.sock is exposed inside the sandbox; this comes from the Docker Sandbox platform, not this image"
     fi
 
-    workspace_root="${WORKSPACE_DIR:-${OPENCLAW_HOME:-}}"
+    workspace_root="$(resolve_workspace_root || true)"
     if [ -n "${workspace_root}" ] && [ -d "${workspace_root}" ]; then
         workspace_fstype="$(audit_mount_fstype "${workspace_root}" || true)"
         if [ "${workspace_fstype}" = "virtiofs" ]; then
-            audit_warn "workspace is mounted via virtiofs; host access scope is controlled by the Docker Sandbox platform"
+            entry_warn "workspace is mounted via virtiofs; host access scope is controlled by the Docker Sandbox platform"
         fi
     fi
 
     if [ -r /sys/module/apparmor/parameters/enabled ]; then
         apparmor_enabled="$(tr -d '\n' </sys/module/apparmor/parameters/enabled 2>/dev/null || true)"
         if [ "${apparmor_enabled}" = "Y" ] || [ "${apparmor_enabled}" = "y" ]; then
-            audit_info "AppArmor support detected"
+            entry_info "AppArmor support detected"
         else
-            audit_warn "AppArmor support is not enabled; confinement depends on the Docker Sandbox platform"
+            entry_warn "AppArmor support is not enabled; confinement depends on the Docker Sandbox platform"
         fi
     else
-        audit_warn "AppArmor visibility is unavailable; confinement depends on the Docker Sandbox platform"
+        entry_warn "AppArmor visibility is unavailable; confinement depends on the Docker Sandbox platform"
     fi
 
     if [ -d /sys/fs/selinux ]; then
         if [ -r /sys/fs/selinux/enforce ] && [ "$(cat /sys/fs/selinux/enforce 2>/dev/null || echo 0)" = "1" ]; then
-            audit_info "SELinux enforcing mode detected"
+            entry_info "SELinux enforcing mode detected"
         else
-            audit_warn "SELinux is present but not enforcing; confinement depends on the Docker Sandbox platform"
+            entry_warn "SELinux is present but not enforcing; confinement depends on the Docker Sandbox platform"
         fi
     else
-        audit_warn "SELinux is not visible inside the sandbox; confinement depends on the Docker Sandbox platform"
+        entry_warn "SELinux is not visible inside the sandbox; confinement depends on the Docker Sandbox platform"
     fi
 }
 
@@ -95,67 +148,47 @@ health_probe() {
     return 1
 }
 
-prepare_openclaw_runtime() {
-    if [ ! -x "${APP_ROOT}/bootstrap" ]; then
-        echo "${APP_ROOT}/bootstrap is missing or not executable" >&2
-        exit 1
-    fi
-
-    eval "$("${APP_ROOT}/bootstrap" prepare --shell)"
-    export OPENCLAW_STATE_DIR
-    export OPENCLAW_CONFIG_PATH
-    export OPENCLAW_GATEWAY_LOG_PATH
-}
-
-start_openclaw_gateway() {
-    port="${OPENCLAW_GATEWAY_PORT:-18789}"
-    bind="${OPENCLAW_GATEWAY_BIND:-loopback}"
-    wait_seconds="${OPENCLAW_GATEWAY_READY_WAIT_SECONDS:-60}"
-
-    prepare_openclaw_runtime
-
-    echo "starting openclaw gateway on ${bind}:${port}"
-    set -- openclaw gateway --bind "${bind}" --port "${port}" --allow-unconfigured
-
-    if [ -n "${OPENCLAW_GATEWAY_TOKEN:-}" ]; then
-        set -- "$@" --auth token --token "${OPENCLAW_GATEWAY_TOKEN}"
-    elif [ -n "${OPENCLAW_GATEWAY_PASSWORD:-}" ]; then
-        set -- "$@" --auth password --password "${OPENCLAW_GATEWAY_PASSWORD}"
-    fi
-
-    "$@" >"${OPENCLAW_GATEWAY_LOG_PATH}" 2>&1 &
-    gw_pid=$!
-    trap 'kill ${gw_pid} 2>/dev/null || true' EXIT INT TERM
-
-    ready_base="${OPENCLAW_GATEWAY_URL:-http://127.0.0.1:${port}}"
-    ready_healthz="${ready_base%/}/healthz"
-    ready_health="${ready_base%/}/health"
-
-    i=0
-    while [ "${i}" -lt "${wait_seconds}" ]; do
-        if ! kill -0 "${gw_pid}" 2>/dev/null; then
-            echo "openclaw gateway exited unexpectedly" >&2
-            echo "see ${OPENCLAW_GATEWAY_LOG_PATH}" >&2
-            exit 1
-        fi
-
-        if health_probe "${ready_healthz}" || health_probe "${ready_health}"; then
-            echo "openclaw gateway is ready"
+validate_runtime_type() {
+    case "$1" in
+        openclaw|claude|telegramcustomer|test)
             return 0
-        fi
-
-        i=$((i + 1))
-        sleep 1
-    done
-
-    echo "openclaw gateway did not become ready in ${wait_seconds}s" >&2
-    echo "see ${OPENCLAW_GATEWAY_LOG_PATH}" >&2
-    exit 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
-if [ "${RUNTIME_TYPE:-openclaw}" = "openclaw" ]; then
-    run_security_audit
-    start_openclaw_gateway
+run_bootstrap_hook() {
+    runtime="$1"
+    hook_path="${BOOTSTRAP_DIR}/${runtime}.sh"
+
+    if [ ! -f "${hook_path}" ]; then
+        entry_info "no bootstrap hook configured for runtime ${runtime}"
+        return 0
+    fi
+    if [ ! -x "${hook_path}" ]; then
+        entry_fail "bootstrap hook exists but is not executable: ${hook_path}"
+    fi
+
+    BOOTSTRAP_RUNTIME="${runtime}"
+    export BOOTSTRAP_RUNTIME APP_ROOT
+    . "${hook_path}"
+    BOOTSTRAP_RUNTIME=""
+    unset BOOTSTRAP_RUNTIME || true
+}
+
+if [ ! -x "${APP_ROOT}/main" ]; then
+    entry_fail "${APP_ROOT}/main is missing or not executable"
 fi
 
-"${APP_ROOT}/main"
+runtime_type="${RUNTIME_TYPE:-openclaw}"
+if ! validate_runtime_type "${runtime_type}"; then
+    entry_fail "unsupported runtime type: ${runtime_type}"
+fi
+
+entry_info "runtime type selected: ${runtime_type}"
+run_security_audit
+run_bootstrap_hook "${runtime_type}"
+
+exec "${APP_ROOT}/main"

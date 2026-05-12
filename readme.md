@@ -13,7 +13,7 @@ More about HyMatrix & Vmdocker:
 
 ## 🚀 Features
 
-- **Runtime Modes**: Supports `openclaw` and in-memory `test` runtimes via `RUNTIME_TYPE`
+- **Runtime Modes**: Supports `openclaw`, `claude`, and in-memory `test` runtimes via `RUNTIME_TYPE`
 - **Docker Integration**: Containerized deployment for consistency
 - **RESTful API**: `/vmm/health`, `/vmm/spawn`, `/vmm/apply`
 
@@ -23,6 +23,12 @@ The runtime behavior can be customized via environment variables.
 
 ### General
 - `RUNTIME_TYPE`: Runtime implementation selector (e.g., `openclaw`, `test`).
+- `CLAUDE_CODE_BIN`: Optional Claude CLI path override for custom images or tests.
+- `CLAUDE_CODE_TIMEOUT_MS`: Optional Claude CLI timeout in milliseconds (default: `600000`).
+- `CLAUDE_CODE_FLAGS`: Optional extra Claude CLI flags appended to the default headless invocation. Quote values with spaces.
+- `ANTHROPIC_MODEL`: Optional Claude model override.
+- `ANTHROPIC_API_KEY`: API key for Claude runtime.
+- `ANTHROPIC_BASE_URL`: Optional Anthropic-compatible base URL for proxy/gateway routing.
 - `OPENCLAW_GATEWAY_URL`: Base URL for the Openclaw gateway (default: `http://127.0.0.1:18789`).
 - `OPENCLAW_GATEWAY_TOKEN`: Authentication token for the gateway (optional).
 - `OPENCLAW_TIMEOUT_MS`: Request timeout in milliseconds (default: `30000`).
@@ -76,26 +82,52 @@ Customize the API paths appended to the gateway base URL:
 - Docker installed and running
 - Go 1.24+ (for local development)
 
-### Build OCI Image
+### Build OpenClaw Image
 
 ```bash
-./docker_build.sh <VERSION>
+./docker_build_openclaw.sh <VERSION>
 ```
 
 - `<VERSION>`: Image version tag (e.g., v1.0.0, latest, dev)
 
 ```bash
-./docker_build.sh v1.0.0
-./docker_build.sh latest
+./docker_build_openclaw.sh v1.0.0
+./docker_build_openclaw.sh latest
 ```
+
+The OpenClaw build script supports overrides:
+
+```bash
+IMAGE_NAME=chriswebber/docker-openclaw ./docker_build_openclaw.sh latest
+```
+
+### One-Click Claude Image Build
+
+Use the dedicated helper for the Claude-oriented image:
+
+```bash
+./docker_build_claude.sh
+./docker_build_claude.sh claude-e2e
+```
+
+Defaults:
+
+- image name: `chriswebber/docker-claude`
+- tag: `latest`
 
 ### Run OCI Container
 
-```bash
-./docker_run.sh
-```
+Run the built image with `docker run` directly. The OCI image still exposes `/vmm/health`, `/vmm/spawn`, and `/vmm/apply` on port `8080`.
 
-The OCI image still exposes `/vmm/health`, `/vmm/spawn`, and `/vmm/apply` on port `8080`.
+Example:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e RUNTIME_TYPE=claude \
+  -e ANTHROPIC_API_KEY=your_key \
+  -e ANTHROPIC_BASE_URL=https://your-base-url \
+  chriswebber/docker-claude:latest
+```
 
 ## 🧪 Docker Sandbox Template Workflow
 
@@ -117,6 +149,9 @@ with these default paths inside that per-instance workspace:
 - `OPENCLAW_STATE_DIR=<workspace>/.openclaw`
 - `OPENCLAW_CONFIG_PATH=<workspace>/.openclaw/openclaw.json`
 - `OPENCLAW_AGENT_WORKSPACE=<workspace>/.openclaw/workspace`
+- `VMDOCKER_RUNTIME_WORKSPACE=<workspace>`
+- `VMDOCKER_RUNTIME_HOME=<workspace>/.home`
+- `VMDOCKER_AGENT_WORKSPACE=<workspace>/workspace`
 - `HOME=<workspace>/.home`
 - `TMPDIR=<workspace>/.tmp`
 - `XDG_CONFIG_HOME=<workspace>/.xdg/config`
@@ -127,44 +162,50 @@ This is the contract a portable `vmdocker_agent` image should expect from `vmdoc
 
 Sandbox startup now runs a security audit before launching OpenClaw. The image treats passwordless `sudo` for `agent` as a fatal misconfiguration and refuses to start if it is still present. Platform-level exposures such as `docker.sock`, `virtiofs`, and missing AppArmor/SELinux visibility are logged as high-priority warnings but do not block startup, because they are controlled by Docker Sandbox rather than this image.
 
+Runtime bootstrap now uses a shared entrypoint plus runtime-specific hooks:
+
+- shared entrypoint: `/usr/local/bin/start-vmdocker-agent.sh`
+- runtime hooks: `/usr/local/lib/vmdocker-agent/bootstrap/<runtime>.sh`
+
+The shared entrypoint is responsible for:
+
+- selecting `RUNTIME_TYPE`
+- running common preflight and security audit
+- sourcing the matching runtime bootstrap hook when present
+- `exec`-ing `/app/main`
+
 Recommended deployment posture:
 - Do not treat Docker Sandbox alone as a hard trust boundary.
 - If your platform allows it, avoid exposing `/var/run/docker.sock` to untrusted sandboxes.
 - Limit the shared workspace path to the smallest host directory you actually need.
 
-### Build Sandbox Template
+### Build Sandbox Template Image
+
+The repository now keeps the image definitions split:
+
+- [`Dockerfile.openclaw`](/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/Dockerfile.openclaw)
+- [`Dockerfile.claude`](/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/Dockerfile.claude)
+
+Use either:
 
 ```bash
-./docker_build_sandbox.sh <VERSION>
+./docker_build_openclaw.sh latest
+./docker_build_claude.sh latest
 ```
-
-Example:
-
-```bash
-./docker_build_sandbox.sh latest
-```
-
-This step only builds the sandbox template image from [`Dockerfile.sandbox`](/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/Dockerfile.sandbox). It does not create or run a sandbox yet.
 
 ### Create And Run Sandbox
 
-Use the helper script:
+Run the Docker Sandbox commands directly:
 
 ```bash
-./docker_run_sandbox.sh
-```
-
-Or run the Docker Sandbox commands directly:
-
-```bash
-docker sandbox create --name hymatrix-openclaw-sandbox -t chriswebber/docker-openclaw-sandbox:latest shell /path/to/workspace
+docker sandbox create --name hymatrix-openclaw-sandbox -t chriswebber/docker-claude:latest shell /path/to/workspace
 docker sandbox run hymatrix-openclaw-sandbox
 ```
 
 If you want Docker to create and run in one go, the CLI also supports:
 
 ```bash
-docker sandbox run --name hymatrix-openclaw-sandbox -t chriswebber/docker-openclaw-sandbox:latest shell /path/to/workspace
+docker sandbox run --name hymatrix-openclaw-sandbox -t chriswebber/docker-claude:latest shell /path/to/workspace
 ```
 
 After the sandbox is running, start the service inside it with:
@@ -208,7 +249,14 @@ VMDOCKER_PRIVATE_KEY=
 Then enable one generation mode in the same file:
 
 - Pull mode: `VMDOCKER_SANDBOX_IMAGE_NAME`, optional `VMDOCKER_SANDBOX_IMAGE_ID`
-- Build mode: `VMDOCKER_BUILD_DOCKERFILE`, `VMDOCKER_BUILD_CONTEXT_DIR`, `VMDOCKER_BUILD_TAG`
+- Local build mode: `VMDOCKER_BUILD_DOCKERFILE`, optional `VMDOCKER_BUILD_CONTEXT_DIR`, optional `VMDOCKER_BUILD_TAG`
+- Remote build mode: `VMDOCKER_BUILD_DOCKERFILE_PATH`, `VMDOCKER_BUILD_CONTEXT_URL`, optional `VMDOCKER_BUILD_TAG`
+- Optional build args: `VMDOCKER_BUILD_ARG_<NAME>=<value>`
+
+Recommended local Dockerfile values:
+
+- `VMDOCKER_BUILD_DOCKERFILE=Dockerfile.openclaw`
+- `VMDOCKER_BUILD_DOCKERFILE=Dockerfile.claude`
 
 The repository already includes a ready-to-fill `.env` template with all of these entries commented by mode.
 
@@ -235,6 +283,13 @@ Recommended split:
 - Module tags: describe the image, especially `Start-Command`
 - Spawn tags: choose the runtime, especially `Runtime-Backend`
 
+Claude spawn requests should pass runtime env through `Container-Env-*` tags, for example:
+
+- `Container-Env-RUNTIME_TYPE=claude`
+- `Container-Env-ANTHROPIC_API_KEY=...`
+- `Container-Env-ANTHROPIC_BASE_URL=...`
+- `Container-Env-ANTHROPIC_MODEL=...`
+
 Current backend behavior:
 
 - `docker`: root filesystem is mounted read-only; writable runtime state lives in the mapped instance workspace
@@ -251,6 +306,12 @@ go test -v -cover ./...
 
 # OCI smoke test
 ./scripts/docker_test_requests.sh
+
+# Claude smoke test
+ANTHROPIC_API_KEY=... ./scripts/docker_test_claude.sh
+
+# Entrypoint dispatch regression test
+./scripts/test_start_vmdocker_agent.sh
 
 # Sandbox smoke test
 ./scripts/docker_test_sandbox.sh
@@ -505,18 +566,17 @@ For `Chat`, runtime additionally writes reply text to:
 ```
 .
 ├── common/             # Shared utilities
+├── bootstrap/          # Runtime bootstrap hooks for the shared entrypoint
 ├── runtime/            # Runtime implementations
 │   ├── openclaw/        # Openclaw runtime
 │   └── testrt/          # In-memory test runtime
 ├── server/             # HTTP server implementation
 ├── utils/              # Helper utilities
-├── Dockerfile          # Docker build file
-├── Dockerfile.sandbox  # Docker Sandboxes template build file
-├── docker_build.sh     # Build script
-├── docker_build_sandbox.sh # Sandbox template build script
-├── docker_run_sandbox.sh # Sandbox create/run helper
-├── start-vmdocker-agent.sh # Shared bootstrap script for OCI/sandbox
-├── docker_run.sh       # Run script
+├── Dockerfile.openclaw # OpenClaw image definition
+├── Dockerfile.claude   # Claude image definition
+├── docker_build_openclaw.sh # OpenClaw image build script
+├── docker_build_claude.sh # Claude image build script
+├── start-vmdocker-agent.sh # Shared runtime bootstrap entrypoint
 └── main.go            # Application entry point
 ```
 

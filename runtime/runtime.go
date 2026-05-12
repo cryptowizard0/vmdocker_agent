@@ -6,8 +6,10 @@ import (
 	"os"
 
 	"github.com/cryptowizard0/vmdocker_agent/common"
+	"github.com/cryptowizard0/vmdocker_agent/runtime/claudecode"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/openclaw"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/schema"
+	"github.com/cryptowizard0/vmdocker_agent/runtime/telegramcustomer"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/testrt"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 	goarSchema "github.com/permadao/goar/schema"
@@ -16,8 +18,10 @@ import (
 var log = common.NewLog("runtime")
 
 const (
-	RuntimeTypeTest     = "test"
-	RuntimeTypeOpenclaw = "openclaw"
+	RuntimeTypeTest             = "test"
+	RuntimeTypeOpenclaw         = "openclaw"
+	RuntimeTypeClaude           = "claude"
+	RuntimeTypeTelegramCustomer = "telegramcustomer"
 )
 
 type Runtime struct {
@@ -53,6 +57,18 @@ func newRuntime(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag
 			vm, err = openclaw.NewRestored(state)
 		} else {
 			vm, err = openclaw.NewWithParams(spawnParams)
+		}
+	case RuntimeTypeClaude:
+		if restore {
+			vm, err = claudecode.NewRestored(state, spawnParams)
+		} else {
+			vm, err = claudecode.NewWithParams(spawnParams)
+		}
+	case RuntimeTypeTelegramCustomer:
+		if restore {
+			vm, err = telegramcustomer.NewRestored(state, spawnParams)
+		} else {
+			vm, err = telegramcustomer.NewWithParams(spawnParams)
 		}
 	default:
 		return nil, fmt.Errorf("runtime type not supported: %s", runtimeType)
