@@ -65,12 +65,12 @@ func decodeCheckpointEnvelope(data string) (checkpointEnvelope, bool, error) {
 
 	var envelope checkpointEnvelope
 	if err := json.Unmarshal([]byte(data), &envelope); err != nil {
-		return checkpointEnvelope{}, false, err
+		return checkpointEnvelope{}, false, fmt.Errorf("unmarshal checkpoint envelope failed: %w", err)
 	}
-	if envelope.Profile == "" {
+	if strings.TrimSpace(envelope.Profile) == "" {
 		return checkpointEnvelope{}, false, fmt.Errorf("checkpoint envelope profile is required")
 	}
-	if envelope.Backend == "" {
+	if strings.TrimSpace(envelope.Backend) == "" {
 		return checkpointEnvelope{}, false, fmt.Errorf("checkpoint envelope backend is required")
 	}
 	return envelope, true, nil

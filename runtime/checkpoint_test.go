@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/cryptowizard0/vmdocker_agent/harness"
@@ -47,5 +48,46 @@ func TestDecodeCheckpointEnvelopeTreatsLegacyStateAsNonEnvelope(t *testing.T) {
 	}
 	if ok {
 		t.Fatalf("legacy state should not be treated as envelope")
+	}
+}
+
+func TestDecodeCheckpointEnvelopeRejectsBlankProfileOrBackend(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr string
+	}{
+		{
+			name:    "blank profile",
+			payload: `{"format":"vmdocker_agent.runtime.v1","profile":"  ","backend":"claude"}`,
+			wantErr: "checkpoint envelope profile is required",
+		},
+		{
+			name:    "blank backend",
+			payload: `{"format":"vmdocker_agent.runtime.v1","profile":"claude","backend":"  "}`,
+			wantErr: "checkpoint envelope backend is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok, err := decodeCheckpointEnvelope(tt.payload)
+			if err == nil || ok {
+				t.Fatalf("expected validation error, ok=%v err=%v", ok, err)
+			}
+			if err.Error() != tt.wantErr {
+				t.Fatalf("err = %q, want %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestDecodeCheckpointEnvelopeWrapsMalformedEnvelopeError(t *testing.T) {
+	_, ok, err := decodeCheckpointEnvelope(`{"format":"vmdocker_agent.runtime.v1","profile":1,"backend":"claude"}`)
+	if err == nil || ok {
+		t.Fatalf("expected unmarshal error, ok=%v err=%v", ok, err)
+	}
+	if !strings.Contains(err.Error(), "unmarshal checkpoint envelope failed") {
+		t.Fatalf("err = %q", err.Error())
 	}
 }
