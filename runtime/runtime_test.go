@@ -267,6 +267,42 @@ func TestNewRuntimeFallsBackToRuntimeTypeClaude(t *testing.T) {
 	}
 }
 
+func TestApplyHarnessEnvDoesNotMutateSelectorEnv(t *testing.T) {
+	t.Setenv("VMDOCKER_AGENT_PROFILE", "")
+	t.Setenv("VMDOCKER_AGENT_PROFILE_DIR", "/caller/profile-dir")
+	t.Setenv("RUNTIME_TYPE", RuntimeTypeClaude)
+
+	env := map[string]string{
+		"VMDOCKER_AGENT_PROFILE":     "test",
+		"VMDOCKER_AGENT_PROFILE_DIR": "/runtime/.vmdocker-agent/profiles/test",
+		"RUNTIME_TYPE":               RuntimeTypeTest,
+		"VMDOCKER_AGENT_ASSET_ROOT":  "/runtime/.vmdocker-agent",
+		"VMDOCKER_AGENT_ROLE_PATH":   "/runtime/.vmdocker-agent/roles/test.md",
+		"VMDOCKER_AGENT_CONTEXT_DIR": "/runtime/.vmdocker-agent/context",
+		"VMDOCKER_AGENT_MEMORY_DIR":  "/runtime/.vmdocker-agent/memory",
+		"VMDOCKER_AGENT_SKILLS_DIR":  "/runtime/.vmdocker-agent/skills",
+	}
+
+	if err := applyHarnessEnv(env); err != nil {
+		t.Fatalf("applyHarnessEnv failed: %v", err)
+	}
+	if got := os.Getenv("VMDOCKER_AGENT_PROFILE"); got != "" {
+		t.Fatalf("VMDOCKER_AGENT_PROFILE = %q, want unchanged empty value", got)
+	}
+	if got := os.Getenv("VMDOCKER_AGENT_PROFILE_DIR"); got != "/caller/profile-dir" {
+		t.Fatalf("VMDOCKER_AGENT_PROFILE_DIR = %q, want caller value", got)
+	}
+	if got := os.Getenv("RUNTIME_TYPE"); got != RuntimeTypeClaude {
+		t.Fatalf("RUNTIME_TYPE = %q, want caller value", got)
+	}
+	if got := os.Getenv("VMDOCKER_AGENT_ROLE_PATH"); got != "/runtime/.vmdocker-agent/roles/test.md" {
+		t.Fatalf("VMDOCKER_AGENT_ROLE_PATH = %q", got)
+	}
+	if got := os.Getenv("VMDOCKER_AGENT_CONTEXT_DIR"); got != "/runtime/.vmdocker-agent/context" {
+		t.Fatalf("VMDOCKER_AGENT_CONTEXT_DIR = %q", got)
+	}
+}
+
 func setupRuntimeProfileEnv(t *testing.T, profileName string) string {
 	t.Helper()
 
@@ -284,6 +320,9 @@ func setupRuntimeProfileEnv(t *testing.T, profileName string) string {
 	t.Setenv("VMDOCKER_RUNTIME_WORKSPACE", runtimeRoot)
 	t.Setenv("VMDOCKER_AGENT_WORKSPACE", filepath.Join(runtimeRoot, "workspace"))
 	t.Setenv("VMDOCKER_RUNTIME_HOME", filepath.Join(runtimeRoot, ".home"))
+	for _, key := range harnessEnvKeys {
+		t.Setenv(key, "")
+	}
 
 	return runtimeRoot
 }

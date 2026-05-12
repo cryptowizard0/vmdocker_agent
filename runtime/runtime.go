@@ -27,6 +27,14 @@ const (
 	RuntimeTypeTelegramCustomer = "telegramcustomer"
 )
 
+var harnessEnvKeys = []string{
+	"VMDOCKER_AGENT_ASSET_ROOT",
+	"VMDOCKER_AGENT_SKILLS_DIR",
+	"VMDOCKER_AGENT_ROLE_PATH",
+	"VMDOCKER_AGENT_CONTEXT_DIR",
+	"VMDOCKER_AGENT_MEMORY_DIR",
+}
+
 type Runtime struct {
 	backend     backend.Backend
 	profileName string
@@ -132,7 +140,11 @@ func newBackend(name string, cfg backend.Config) (backend.Backend, error) {
 }
 
 func applyHarnessEnv(env map[string]string) error {
-	for key, value := range env {
+	for _, key := range harnessEnvKeys {
+		value, ok := env[key]
+		if !ok {
+			continue
+		}
 		if err := os.Setenv(key, value); err != nil {
 			return fmt.Errorf("apply harness env %s failed: %w", key, err)
 		}
