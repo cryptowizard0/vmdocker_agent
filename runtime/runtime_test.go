@@ -38,13 +38,14 @@ func TestNewRuntimeOpenclaw(t *testing.T) {
 	t.Setenv("RUNTIME_TYPE", RuntimeTypeOpenclaw)
 	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
 	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
+	setupRuntimeProfileEnv(t, "")
 
 	rt, err := New(vmmSchema.Env{}, "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("new runtime failed: %v", err)
 	}
-	if rt == nil || rt.vm == nil {
-		t.Fatalf("runtime vm is nil")
+	if rt == nil || rt.backend == nil {
+		t.Fatalf("runtime backend is nil")
 	}
 }
 
@@ -82,13 +83,14 @@ func TestNewRestoredRuntimeOpenclaw(t *testing.T) {
 	t.Setenv("RUNTIME_TYPE", RuntimeTypeOpenclaw)
 	t.Setenv("OPENCLAW_GATEWAY_URL", gateway.URL)
 	t.Setenv("OPENCLAW_TIMEOUT_MS", "1000")
+	setupRuntimeProfileEnv(t, "")
 
 	rt, err := NewRestored(vmmSchema.Env{}, "", "", nil, `{"format":"openclaw.runtime.v1","sessionId":"runtime-restored-1"}`)
 	if err != nil {
 		t.Fatalf("new restored runtime failed: %v", err)
 	}
-	if rt == nil || rt.vm == nil {
-		t.Fatalf("runtime vm is nil")
+	if rt == nil || rt.backend == nil {
+		t.Fatalf("runtime backend is nil")
 	}
 
 	if _, err := rt.Apply("target-1", vmmSchema.Meta{Action: "Execute"}, map[string]string{"Command": "hi"}); err != nil {
@@ -103,7 +105,7 @@ func TestNewRestoredRuntimeOpenclaw(t *testing.T) {
 }
 
 func TestNewRuntimeClaude(t *testing.T) {
-	workspace := t.TempDir()
+	setupRuntimeProfileEnv(t, "")
 	cliPath := filepath.Join(t.TempDir(), "claude")
 	script := "#!/bin/sh\nprintf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"ok\",\"session_id\":\"claude-session-1\"}'\n"
 	if err := os.WriteFile(cliPath, []byte(script), 0o755); err != nil {
@@ -112,21 +114,20 @@ func TestNewRuntimeClaude(t *testing.T) {
 
 	t.Setenv("RUNTIME_TYPE", RuntimeTypeClaude)
 	t.Setenv("CLAUDE_CODE_BIN", cliPath)
-	t.Setenv("VMDOCKER_AGENT_WORKSPACE", workspace)
 	t.Setenv("ANTHROPIC_MODEL", "test-model")
 
 	rt, err := New(vmmSchema.Env{}, "", "", nil, map[string]string{"model": "qwen3.5-plus"})
 	if err != nil {
 		t.Fatalf("new runtime failed: %v", err)
 	}
-	if rt == nil || rt.vm == nil {
-		t.Fatalf("runtime vm is nil")
+	if rt == nil || rt.backend == nil {
+		t.Fatalf("runtime backend is nil")
 	}
 }
 
 func TestNewRestoredRuntimeClaude(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "claude.log")
-	workspace := t.TempDir()
+	setupRuntimeProfileEnv(t, "")
 	cliPath := filepath.Join(t.TempDir(), "claude")
 	script := "#!/bin/sh\nprintf '%s\n' \"$*\" >>" + shellQuoteForTest(logPath) + "\nprintf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"restored\",\"session_id\":\"runtime-restored-1\"}'\n"
 	if err := os.WriteFile(cliPath, []byte(script), 0o755); err != nil {
@@ -135,14 +136,13 @@ func TestNewRestoredRuntimeClaude(t *testing.T) {
 
 	t.Setenv("RUNTIME_TYPE", RuntimeTypeClaude)
 	t.Setenv("CLAUDE_CODE_BIN", cliPath)
-	t.Setenv("VMDOCKER_AGENT_WORKSPACE", workspace)
 
 	rt, err := NewRestored(vmmSchema.Env{}, "", "", nil, `{"format":"claudecode.runtime.v1","sessionId":"runtime-restored-1"}`)
 	if err != nil {
 		t.Fatalf("new restored runtime failed: %v", err)
 	}
-	if rt == nil || rt.vm == nil {
-		t.Fatalf("runtime vm is nil")
+	if rt == nil || rt.backend == nil {
+		t.Fatalf("runtime backend is nil")
 	}
 
 	if _, err := rt.Apply("target-1", vmmSchema.Meta{Action: "Execute"}, map[string]string{"Command": "hi"}); err != nil {
@@ -159,8 +159,9 @@ func TestNewRestoredRuntimeClaude(t *testing.T) {
 }
 
 func TestNewRuntimeTelegramCustomer(t *testing.T) {
-	workspace := t.TempDir()
-	homeDir := t.TempDir()
+	runtimeRoot := setupRuntimeProfileEnv(t, "")
+	workspace := filepath.Join(runtimeRoot, "workspace")
+	homeDir := filepath.Join(runtimeRoot, ".home")
 	cliPath := filepath.Join(t.TempDir(), "claude")
 	script := "#!/bin/sh\nexit 0\n"
 	if err := os.WriteFile(cliPath, []byte(script), 0o755); err != nil {
@@ -186,16 +187,14 @@ func TestNewRuntimeTelegramCustomer(t *testing.T) {
 
 	t.Setenv("RUNTIME_TYPE", RuntimeTypeTelegramCustomer)
 	t.Setenv("CLAUDE_CODE_BIN", cliPath)
-	t.Setenv("VMDOCKER_AGENT_WORKSPACE", workspace)
-	t.Setenv("VMDOCKER_RUNTIME_HOME", homeDir)
 	t.Setenv("BOT_TOKEN", "bot-token")
 
 	rt, err := New(vmmSchema.Env{}, "", "", nil, map[string]string{"model": "qwen3.5-plus"})
 	if err != nil {
 		t.Fatalf("new telegramcustomer runtime failed: %v", err)
 	}
-	if rt == nil || rt.vm == nil {
-		t.Fatalf("runtime vm is nil")
+	if rt == nil || rt.backend == nil {
+		t.Fatalf("runtime backend is nil")
 	}
 
 	state, err := rt.Checkpoint()
@@ -204,6 +203,101 @@ func TestNewRuntimeTelegramCustomer(t *testing.T) {
 	}
 	if !strings.Contains(state, "telegramcustomer.runtime.v1") {
 		t.Fatalf("expected telegramcustomer checkpoint format, got %s", state)
+	}
+}
+
+func TestNewRuntimeClaudeViaAgentProfile(t *testing.T) {
+	setupRuntimeProfileEnv(t, "claude")
+	cliPath := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\nprintf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"profile ok\",\"session_id\":\"sess-profile\"}'\n"
+	if err := os.WriteFile(cliPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude failed: %v", err)
+	}
+	t.Setenv("CLAUDE_CODE_BIN", cliPath)
+
+	rt, err := New(vmmSchema.Env{}, "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	result, err := rt.Apply("target-1", vmmSchema.Meta{Action: "Chat"}, map[string]string{"Command": "hello"})
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if !strings.Contains(result, "profile ok") {
+		t.Fatalf("expected profile result, got %s", result)
+	}
+	state, err := rt.Checkpoint()
+	if err != nil {
+		t.Fatalf("Checkpoint failed: %v", err)
+	}
+	if !strings.Contains(state, checkpointEnvelopeFormatV1) {
+		t.Fatalf("expected checkpoint envelope, got %s", state)
+	}
+}
+
+func TestNewRuntimeFallsBackToRuntimeTypeClaude(t *testing.T) {
+	setupRuntimeProfileEnv(t, "")
+	cliPath := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(cliPath, []byte("#!/bin/sh\nprintf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"ok\",\"session_id\":\"sess\"}'\n"), 0o755); err != nil {
+		t.Fatalf("write fake claude failed: %v", err)
+	}
+
+	t.Setenv("RUNTIME_TYPE", RuntimeTypeClaude)
+	t.Setenv("CLAUDE_CODE_BIN", cliPath)
+
+	rt, err := New(vmmSchema.Env{}, "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if rt.profileName != "claude" {
+		t.Fatalf("profileName = %q, want claude", rt.profileName)
+	}
+}
+
+func setupRuntimeProfileEnv(t *testing.T, profileName string) string {
+	t.Helper()
+
+	runtimeRoot := t.TempDir()
+	assetRoot := filepath.Join(runtimeRoot, ".vmdocker-agent")
+	profileRoot := filepath.Join(assetRoot, "profiles")
+	copyDirForRuntimeTest(t, filepath.Join("..", "harness", "profiles"), profileRoot)
+	copyDirForRuntimeTest(t, filepath.Join("..", "harness", "roles"), filepath.Join(assetRoot, "roles"))
+	copyDirForRuntimeTest(t, filepath.Join("..", "harness", "skills"), filepath.Join(assetRoot, "skills"))
+
+	if profileName != "" {
+		t.Setenv("VMDOCKER_AGENT_PROFILE", profileName)
+	}
+	t.Setenv("VMDOCKER_AGENT_PROFILE_DIR", profileRoot)
+	t.Setenv("VMDOCKER_RUNTIME_WORKSPACE", runtimeRoot)
+	t.Setenv("VMDOCKER_AGENT_WORKSPACE", filepath.Join(runtimeRoot, "workspace"))
+	t.Setenv("VMDOCKER_RUNTIME_HOME", filepath.Join(runtimeRoot, ".home"))
+
+	return runtimeRoot
+}
+
+func copyDirForRuntimeTest(t *testing.T, src, dst string) {
+	t.Helper()
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatalf("read dir %s failed: %v", src, err)
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatalf("mkdir %s failed: %v", dst, err)
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			copyDirForRuntimeTest(t, srcPath, dstPath)
+			continue
+		}
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			t.Fatalf("read %s failed: %v", srcPath, err)
+		}
+		if err := os.WriteFile(dstPath, data, 0o644); err != nil {
+			t.Fatalf("write %s failed: %v", dstPath, err)
+		}
 	}
 }
 
