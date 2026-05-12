@@ -1,0 +1,17 @@
+name = "openclaw-legacy"
+backend = "openclaw-legacy"
+asset_root = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent"
+role = "roles/openclaw-legacy.md"
+
+[paths]
+workspace = "${VMDOCKER_AGENT_WORKSPACE}"
+home = "${VMDOCKER_RUNTIME_HOME}"
+context = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/context"
+memory = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/memory"
+skills = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/skills"
+
+[skills]
+include = []
+
+[env]
+RUNTIME_TYPE = "openclaw"
