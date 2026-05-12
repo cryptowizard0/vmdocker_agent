@@ -171,7 +171,7 @@ func cleanRuntimeRoot(path string) string {
 		return ""
 	}
 	cleanPath := filepath.Clean(path)
-	if cleanPath == string(filepath.Separator) {
+	if cleanPath == string(filepath.Separator) || !filepath.IsAbs(cleanPath) {
 		return ""
 	}
 	return cleanPath

@@ -161,6 +161,32 @@ func TestInitRejectsMissingRuntimeWorkspace(t *testing.T) {
 	assertNoHarnessDirsCreated(t, cwd)
 }
 
+func TestInitRejectsRelativeRuntimeWorkspace(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	_, err := Init(baseProfile(), mapLookup(map[string]string{
+		"VMDOCKER_RUNTIME_WORKSPACE": ".",
+	}))
+	if err == nil {
+		t.Fatal("Init() error = nil, want runtime workspace error")
+	}
+	assertNoHarnessDirsCreated(t, cwd)
+}
+
+func TestInitRejectsRelativeAgentWorkspace(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	_, err := Init(baseProfile(), mapLookup(map[string]string{
+		"VMDOCKER_AGENT_WORKSPACE": "workspace",
+	}))
+	if err == nil {
+		t.Fatal("Init() error = nil, want runtime workspace error")
+	}
+	assertNoHarnessDirsCreated(t, cwd)
+}
+
 func TestInitRejectsTraversalRolePath(t *testing.T) {
 	_, err := Init(baseProfileWithRole("../secret.md"), mapLookup(map[string]string{
 		"VMDOCKER_RUNTIME_WORKSPACE": t.TempDir(),
