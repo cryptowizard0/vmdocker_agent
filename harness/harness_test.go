@@ -124,30 +124,41 @@ func TestInitRejectsMissingSkill(t *testing.T) {
 	}
 }
 
-func TestInitFallsBackWhenRuntimeWorkspaceIsRoot(t *testing.T) {
-	ctx, err := Init(baseProfile(), mapLookup(map[string]string{
+func TestInitRejectsRootRuntimeWorkspace(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	_, err := Init(baseProfile(), mapLookup(map[string]string{
 		"VMDOCKER_RUNTIME_WORKSPACE": string(os.PathSeparator),
 	}))
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
+	if err == nil {
+		t.Fatal("Init() error = nil, want runtime workspace error")
 	}
-	assertNoRootHarnessPath(t, ctx)
-	if ctx.AssetRoot != ".vmdocker-agent" {
-		t.Fatalf("AssetRoot = %q, want .vmdocker-agent", ctx.AssetRoot)
-	}
+	assertNoHarnessDirsCreated(t, cwd)
 }
 
-func TestInitFallsBackWhenAgentWorkspaceParentIsRoot(t *testing.T) {
-	ctx, err := Init(baseProfile(), mapLookup(map[string]string{
+func TestInitRejectsAgentWorkspaceWithRootParent(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	_, err := Init(baseProfile(), mapLookup(map[string]string{
 		"VMDOCKER_AGENT_WORKSPACE": filepath.Join(string(os.PathSeparator), "workspace"),
 	}))
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
+	if err == nil {
+		t.Fatal("Init() error = nil, want runtime workspace error")
 	}
-	assertNoRootHarnessPath(t, ctx)
-	if ctx.AssetRoot != ".vmdocker-agent" {
-		t.Fatalf("AssetRoot = %q, want .vmdocker-agent", ctx.AssetRoot)
+	assertNoHarnessDirsCreated(t, cwd)
+}
+
+func TestInitRejectsMissingRuntimeWorkspace(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	_, err := Init(baseProfile(), mapLookup(map[string]string{}))
+	if err == nil {
+		t.Fatal("Init() error = nil, want runtime workspace error")
 	}
+	assertNoHarnessDirsCreated(t, cwd)
 }
 
 func TestInitRejectsTraversalRolePath(t *testing.T) {
@@ -201,18 +212,9 @@ func baseProfileWithRole(role string) profile.Profile {
 	}
 }
 
-func assertNoRootHarnessPath(t *testing.T, ctx Context) {
+func assertNoHarnessDirsCreated(t *testing.T, cwd string) {
 	t.Helper()
-	for name, path := range map[string]string{
-		"AssetRoot":  ctx.AssetRoot,
-		"ContextDir": ctx.ContextDir,
-		"MemoryDir":  ctx.MemoryDir,
-		"SkillsDir":  ctx.SkillsDir,
-		"RolePath":   ctx.RolePath,
-	} {
-		if path == filepath.Join(string(os.PathSeparator), ".vmdocker-agent") ||
-			strings.HasPrefix(path, filepath.Join(string(os.PathSeparator), ".vmdocker-agent")+string(os.PathSeparator)) {
-			t.Fatalf("%s = %q, want no root-level harness path", name, path)
-		}
+	if _, err := os.Stat(filepath.Join(cwd, ".vmdocker-agent")); !os.IsNotExist(err) {
+		t.Fatalf("local harness dir stat error = %v, want not exist", err)
 	}
 }

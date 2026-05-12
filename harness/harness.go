@@ -38,7 +38,10 @@ func Init(prof profile.Profile, lookup EnvLookup) (Context, error) {
 		lookup = os.Getenv
 	}
 
-	runtimeRoot := runtimeWorkspace(lookup)
+	runtimeRoot, err := runtimeWorkspace(lookup)
+	if err != nil {
+		return Context{}, err
+	}
 	assetRoot := normalizeAssetRoot(expand(prof.AssetRoot, lookup), runtimeRoot)
 	workspace := expand(prof.Paths.Workspace, lookup)
 	if workspace == "" {
@@ -108,14 +111,17 @@ func Init(prof profile.Profile, lookup EnvLookup) (Context, error) {
 	return ctx, nil
 }
 
-func runtimeWorkspace(lookup EnvLookup) string {
+func runtimeWorkspace(lookup EnvLookup) (string, error) {
 	if runtimeRoot := cleanRuntimeRoot(lookup(envRuntimeWorkspace)); runtimeRoot != "" {
-		return runtimeRoot
+		return runtimeRoot, nil
 	}
-	if agentWorkspace := cleanRuntimeRoot(filepath.Dir(strings.TrimSpace(lookup(envAgentWorkspace)))); agentWorkspace != "" {
-		return agentWorkspace
+	agentWorkspace := strings.TrimSpace(lookup(envAgentWorkspace))
+	if agentWorkspace != "" {
+		if runtimeRoot := cleanRuntimeRoot(filepath.Dir(agentWorkspace)); runtimeRoot != "" {
+			return runtimeRoot, nil
+		}
 	}
-	return "."
+	return "", fmt.Errorf("runtime workspace is required: set %s or a non-root %s parent", envRuntimeWorkspace, envAgentWorkspace)
 }
 
 func normalizeAssetRoot(path, runtimeRoot string) string {
