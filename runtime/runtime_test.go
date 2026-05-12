@@ -207,9 +207,10 @@ func TestNewRuntimeTelegramCustomer(t *testing.T) {
 }
 
 func TestNewRuntimeClaudeViaAgentProfile(t *testing.T) {
-	setupRuntimeProfileEnv(t, "claude")
+	runtimeRoot := setupRuntimeProfileEnv(t, "claude")
+	logPath := filepath.Join(t.TempDir(), "claude-env.log")
 	cliPath := filepath.Join(t.TempDir(), "claude")
-	script := "#!/bin/sh\nprintf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"profile ok\",\"session_id\":\"sess-profile\"}'\n"
+	script := "#!/bin/sh\nprintf 'role=%s\\ncontext=%s\\n' \"$VMDOCKER_AGENT_ROLE_PATH\" \"$VMDOCKER_AGENT_CONTEXT_DIR\" >" + shellQuoteForTest(logPath) + "\nprintf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"profile ok\",\"session_id\":\"sess-profile\"}'\n"
 	if err := os.WriteFile(cliPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake claude failed: %v", err)
 	}
@@ -225,6 +226,18 @@ func TestNewRuntimeClaudeViaAgentProfile(t *testing.T) {
 	}
 	if !strings.Contains(result, "profile ok") {
 		t.Fatalf("expected profile result, got %s", result)
+	}
+	rawEnv, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake claude env log failed: %v", err)
+	}
+	envLog := string(rawEnv)
+	agentRoot := filepath.Join(runtimeRoot, ".vmdocker-agent")
+	if !strings.Contains(envLog, "role="+filepath.Join(agentRoot, "roles", "claude.md")) {
+		t.Fatalf("expected role path under .vmdocker-agent, got %s", envLog)
+	}
+	if !strings.Contains(envLog, "context="+filepath.Join(agentRoot, "context")) {
+		t.Fatalf("expected context path under .vmdocker-agent, got %s", envLog)
 	}
 	state, err := rt.Checkpoint()
 	if err != nil {

@@ -62,6 +62,9 @@ func newRuntime(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag
 	if err != nil {
 		return nil, err
 	}
+	if err := applyHarnessEnv(harnessCtx.Env); err != nil {
+		return nil, err
+	}
 
 	cfg := backend.Config{
 		Harness:     harnessCtx,
@@ -126,6 +129,15 @@ func newBackend(name string, cfg backend.Config) (backend.Backend, error) {
 	default:
 		return nil, fmt.Errorf("runtime backend not supported: %s", name)
 	}
+}
+
+func applyHarnessEnv(env map[string]string) error {
+	for key, value := range env {
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("apply harness env %s failed: %w", key, err)
+		}
+	}
+	return nil
 }
 
 func tagsToParams(tags []goarSchema.Tag) map[string]string {
