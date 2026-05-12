@@ -55,6 +55,31 @@ func Init(prof profile.Profile, lookup EnvLookup) (Context, error) {
 	memoryDir := normalizeAssetChild(expand(prof.Paths.Memory, lookup), runtimeRoot, "memory")
 	skillsDir := normalizeAssetChild(expand(prof.Paths.Skills, lookup), runtimeRoot, "skills")
 
+	assetRoot, err = validateRuntimePath("AssetRoot", assetRoot, runtimeRoot)
+	if err != nil {
+		return Context{}, err
+	}
+	workspace, err = validateRuntimePath("Workspace", workspace, runtimeRoot)
+	if err != nil {
+		return Context{}, err
+	}
+	home, err = validateRuntimePath("Home", home, runtimeRoot)
+	if err != nil {
+		return Context{}, err
+	}
+	contextDir, err = validateRuntimePath("ContextDir", contextDir, runtimeRoot)
+	if err != nil {
+		return Context{}, err
+	}
+	memoryDir, err = validateRuntimePath("MemoryDir", memoryDir, runtimeRoot)
+	if err != nil {
+		return Context{}, err
+	}
+	skillsDir, err = validateRuntimePath("SkillsDir", skillsDir, runtimeRoot)
+	if err != nil {
+		return Context{}, err
+	}
+
 	for _, dir := range []string{assetRoot, workspace, home, contextDir, memoryDir, skillsDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return Context{}, fmt.Errorf("create harness dir %s failed: %w", dir, err)
@@ -175,6 +200,17 @@ func cleanRuntimeRoot(path string) string {
 		return ""
 	}
 	return cleanPath
+}
+
+func validateRuntimePath(name, path, runtimeRoot string) (string, error) {
+	cleanPath := filepath.Clean(strings.TrimSpace(path))
+	if cleanPath == "" || cleanPath == "." || cleanPath == string(filepath.Separator) || !filepath.IsAbs(cleanPath) {
+		return "", fmt.Errorf("invalid %s path %q: must be absolute and non-root", name, path)
+	}
+	if !pathWithin(runtimeRoot, cleanPath) {
+		return "", fmt.Errorf("invalid %s path %q: must stay inside runtime workspace %q", name, path, runtimeRoot)
+	}
+	return cleanPath, nil
 }
 
 func validateSkillName(skill string) error {

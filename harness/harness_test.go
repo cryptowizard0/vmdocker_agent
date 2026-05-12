@@ -187,6 +187,39 @@ func TestInitRejectsRelativeAgentWorkspace(t *testing.T) {
 	assertNoHarnessDirsCreated(t, cwd)
 }
 
+func TestInitRejectsRelativeExpandedWorkspace(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	_, err := Init(baseProfileWithWorkspace("${VMDOCKER_AGENT_WORKSPACE}"), mapLookup(map[string]string{
+		"VMDOCKER_RUNTIME_WORKSPACE": t.TempDir(),
+		"VMDOCKER_AGENT_WORKSPACE":   "workspace",
+	}))
+	if err == nil {
+		t.Fatal("Init() error = nil, want invalid workspace error")
+	}
+	if !strings.Contains(err.Error(), "invalid Workspace") {
+		t.Fatalf("Init() error = %q, want invalid Workspace", err)
+	}
+	assertNoHarnessDirsCreated(t, cwd)
+}
+
+func TestInitRejectsWorkspaceOutsideRuntimeRoot(t *testing.T) {
+	runtimeWorkspace := t.TempDir()
+	outsideWorkspace := t.TempDir()
+
+	_, err := Init(baseProfileWithWorkspace("${VMDOCKER_AGENT_WORKSPACE}"), mapLookup(map[string]string{
+		"VMDOCKER_RUNTIME_WORKSPACE": runtimeWorkspace,
+		"VMDOCKER_AGENT_WORKSPACE":   outsideWorkspace,
+	}))
+	if err == nil {
+		t.Fatal("Init() error = nil, want invalid workspace error")
+	}
+	if !strings.Contains(err.Error(), "invalid Workspace") {
+		t.Fatalf("Init() error = %q, want invalid Workspace", err)
+	}
+}
+
 func TestInitRejectsTraversalRolePath(t *testing.T) {
 	_, err := Init(baseProfileWithRole("../secret.md"), mapLookup(map[string]string{
 		"VMDOCKER_RUNTIME_WORKSPACE": t.TempDir(),
@@ -225,15 +258,22 @@ func baseProfile() profile.Profile {
 }
 
 func baseProfileWithRole(role string) profile.Profile {
+	prof := baseProfileWithWorkspace("")
+	prof.Role = role
+	return prof
+}
+
+func baseProfileWithWorkspace(workspace string) profile.Profile {
 	return profile.Profile{
 		Name:      "claude",
 		Backend:   "claude",
 		AssetRoot: "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent",
-		Role:      role,
+		Role:      "roles/claude.md",
 		Paths: profile.Paths{
-			Context: "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/context",
-			Memory:  "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/memory",
-			Skills:  "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/skills",
+			Workspace: workspace,
+			Context:   "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/context",
+			Memory:    "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/memory",
+			Skills:    "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/skills",
 		},
 	}
 }
