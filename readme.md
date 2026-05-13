@@ -13,7 +13,7 @@ More about HyMatrix & Vmdocker:
 
 ## 🚀 Features
 
-- **Runtime Modes**: Supports `openclaw`, `claude`, and in-memory `test` runtimes via `RUNTIME_TYPE`
+- **Runtime Modes**: Supports profile-driven `openclaw`, `claude`, `telegramcustomer`, and in-memory `test` runtimes
 - **Docker Integration**: Containerized deployment for consistency
 - **RESTful API**: `/vmm/health`, `/vmm/spawn`, `/vmm/apply`
 
@@ -22,7 +22,8 @@ More about HyMatrix & Vmdocker:
 The runtime behavior can be customized via environment variables.
 
 ### General
-- `RUNTIME_TYPE`: Runtime implementation selector (e.g., `openclaw`, `test`).
+- `VMDOCKER_AGENT_PROFILE`: Preferred agent profile selector. If unset, `RUNTIME_TYPE` maps to a compatibility profile.
+- `RUNTIME_TYPE`: Compatibility runtime selector (e.g., `openclaw`, `claude`, `telegramcustomer`, `test`).
 - `CLAUDE_CODE_BIN`: Optional Claude CLI path override for custom images or tests.
 - `CLAUDE_CODE_TIMEOUT_MS`: Optional Claude CLI timeout in milliseconds (default: `600000`).
 - `CLAUDE_CODE_FLAGS`: Optional extra Claude CLI flags appended to the default headless invocation. Quote values with spaces.
@@ -47,6 +48,17 @@ The runtime behavior can be customized via environment variables.
 - `OPENCLAW_GATEWAY_MODE`: Optional gateway mode written into the effective config only when the config file is first materialized.
 - `OPENCLAW_GATEWAY_READY_WAIT_SECONDS`: Startup health-check timeout for the embedded gateway.
 - `NODE_DISABLE_COMPILE_CACHE`: Defaults to `1` in the sandbox image to avoid Node 22 compile-cache crashes during OpenClaw hot restarts after config changes such as Telegram setup.
+
+### Agent Profiles And Harness Assets
+
+- `VMDOCKER_RUNTIME_WORKSPACE`: Required mapped runtime workspace. Harness-visible assets must stay under this directory.
+- `VMDOCKER_AGENT_ASSET_ROOT`: Workspace-scoped harness asset root. Default: `${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent`.
+- `VMDOCKER_AGENT_PROFILE_DIR`: Profile manifest directory. Default: `${VMDOCKER_AGENT_ASSET_ROOT}/profiles`.
+- `VMDOCKER_AGENT_SKILLS_DIR`: Materialized skill directory. Default: `${VMDOCKER_AGENT_ASSET_ROOT}/skills`.
+- `VMDOCKER_AGENT_ROLE_PATH`: Active role file path. Default: `${VMDOCKER_AGENT_ASSET_ROOT}/roles/<profile>.md`.
+- `VMDOCKER_AGENT_CONTEXT_DIR`: Profile context directory. Default: `${VMDOCKER_AGENT_ASSET_ROOT}/context`.
+- `VMDOCKER_AGENT_MEMORY_DIR`: Profile memory directory. Default: `${VMDOCKER_AGENT_ASSET_ROOT}/memory`.
+- `VMDOCKER_AGENT_BUNDLE_ROOT`: Read-only image bundle copied into `VMDOCKER_AGENT_ASSET_ROOT` before startup when workspace assets have not been materialized yet. Default: `/opt/vmdocker-agent-bundle`.
 
 ### Session Management
 - `OPENCLAW_SESSION_KEY`: Fallback session key if session creation fails (default: `main`).
@@ -162,10 +174,14 @@ This is the contract a portable `vmdocker_agent` image should expect from `vmdoc
 
 Sandbox startup now runs a security audit before launching OpenClaw. The image treats passwordless `sudo` for `agent` as a fatal misconfiguration and refuses to start if it is still present. Platform-level exposures such as `docker.sock`, `virtiofs`, and missing AppArmor/SELinux visibility are logged as high-priority warnings but do not block startup, because they are controlled by Docker Sandbox rather than this image.
 
-Runtime bootstrap now uses a shared entrypoint plus runtime-specific hooks:
+Runtime bootstrap now uses a workspace-scoped shared entrypoint plus runtime-specific hooks. The module `Start-Command` materializes the read-only image bundle into the mapped runtime workspace, then execs the workspace entrypoint:
 
-- shared entrypoint: `/usr/local/bin/start-vmdocker-agent.sh`
-- runtime hooks: `/usr/local/lib/vmdocker-agent/bootstrap/<runtime>.sh`
+```text
+Start-Command=sh -lc 'asset_root="${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}"; bundle_root="${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}"; if [ ! -x "$asset_root/bin/start-vmdocker-agent.sh" ] && [ -d "$bundle_root" ]; then mkdir -p "$asset_root"; cp -R "$bundle_root/." "$asset_root/"; chmod +x "$asset_root/bin/start-vmdocker-agent.sh"; fi; exec "$asset_root/bin/start-vmdocker-agent.sh"'
+```
+
+- shared entrypoint: `${VMDOCKER_AGENT_ASSET_ROOT}/bin/start-vmdocker-agent.sh`
+- runtime hooks: `${VMDOCKER_AGENT_ASSET_ROOT}/bootstrap/<runtime>.sh`
 
 The shared entrypoint is responsible for:
 
@@ -275,7 +291,7 @@ The generated module does not pin a runtime backend anymore. Backend selection n
 
 The generated module should carry the image startup contract through module tags:
 
-- `Start-Command=/usr/local/bin/start-vmdocker-agent.sh`
+- `Start-Command=sh -lc 'asset_root="${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}"; bundle_root="${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}"; if [ ! -x "$asset_root/bin/start-vmdocker-agent.sh" ] && [ -d "$bundle_root" ]; then mkdir -p "$asset_root"; cp -R "$bundle_root/." "$asset_root/"; chmod +x "$asset_root/bin/start-vmdocker-agent.sh"; fi; exec "$asset_root/bin/start-vmdocker-agent.sh"'`
 - optional metadata such as `Sandbox-Agent` and `Openclaw-Version`
 
 Recommended split:
@@ -565,19 +581,21 @@ For `Chat`, runtime additionally writes reply text to:
 
 ```
 .
-├── common/             # Shared utilities
-├── bootstrap/          # Runtime bootstrap hooks for the shared entrypoint
-├── runtime/            # Runtime implementations
-│   ├── openclaw/        # Openclaw runtime
-│   └── testrt/          # In-memory test runtime
-├── server/             # HTTP server implementation
-├── utils/              # Helper utilities
-├── Dockerfile.openclaw # OpenClaw image definition
-├── Dockerfile.claude   # Claude image definition
-├── docker_build_openclaw.sh # OpenClaw image build script
-├── docker_build_claude.sh # Claude image build script
+├── bootstrap/              # Runtime bootstrap hooks bundled into workspace assets
+├── build/                  # Declarative build profiles
+├── buildmanifest/          # Build profile validation
+├── cmd/                    # Build and module CLIs
+├── harness/                # Workspace, role, skill, context, and memory support
+├── modulegen/              # VMDocker module generation
+├── runtime/                # Agent profile resolver and backend adapters
+│   ├── backend/            # Backend interface and adapters
+│   ├── claudecode/         # Claude runtime implementation
+│   ├── openclaw/           # OpenClaw runtime implementation
+│   ├── profile/            # Profile manifest resolver
+│   └── testrt/             # In-memory test runtime
+├── server/                 # HTTP server implementation
 ├── start-vmdocker-agent.sh # Shared runtime bootstrap entrypoint
-└── main.go            # Application entry point
+└── main.go                 # Application entry point
 ```
 
 ## 🤝 Contributing
