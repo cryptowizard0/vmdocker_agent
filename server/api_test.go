@@ -19,6 +19,7 @@ import (
 func setupTestServer(t *testing.T) *Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
+	setupServerRuntimeProfileEnv(t)
 
 	s := New(0)
 	s.engine = gin.New()
@@ -31,6 +32,64 @@ func setupTestServer(t *testing.T) *Server {
 	engine.POST("/spawn", s.spawn)
 
 	return s
+}
+
+func setupServerRuntimeProfileEnv(t *testing.T) string {
+	t.Helper()
+
+	runtimeRoot := os.Getenv("VMDOCKER_RUNTIME_WORKSPACE")
+	if runtimeRoot == "" {
+		runtimeRoot = t.TempDir()
+		t.Setenv("VMDOCKER_RUNTIME_WORKSPACE", runtimeRoot)
+	}
+
+	assetRoot := filepath.Join(runtimeRoot, ".vmdocker-agent")
+	profileRoot := filepath.Join(assetRoot, "profiles")
+	copyTestDir(t, filepath.Join("..", "harness", "profiles"), profileRoot)
+	copyTestDir(t, filepath.Join("..", "harness", "roles"), filepath.Join(assetRoot, "roles"))
+	copyTestDir(t, filepath.Join("..", "harness", "skills"), filepath.Join(assetRoot, "skills"))
+
+	t.Setenv("VMDOCKER_AGENT_PROFILE_DIR", profileRoot)
+	t.Setenv("VMDOCKER_AGENT_WORKSPACE", filepath.Join(runtimeRoot, "workspace"))
+	t.Setenv("VMDOCKER_RUNTIME_HOME", filepath.Join(runtimeRoot, ".home"))
+	for _, key := range []string{
+		"VMDOCKER_AGENT_ASSET_ROOT",
+		"VMDOCKER_AGENT_SKILLS_DIR",
+		"VMDOCKER_AGENT_ROLE_PATH",
+		"VMDOCKER_AGENT_CONTEXT_DIR",
+		"VMDOCKER_AGENT_MEMORY_DIR",
+	} {
+		t.Setenv(key, "")
+	}
+
+	return runtimeRoot
+}
+
+func copyTestDir(t *testing.T, src, dst string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatalf("read dir %s failed: %v", src, err)
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatalf("mkdir %s failed: %v", dst, err)
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			copyTestDir(t, srcPath, dstPath)
+			continue
+		}
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			t.Fatalf("read %s failed: %v", srcPath, err)
+		}
+		if err := os.WriteFile(dstPath, data, 0o644); err != nil {
+			t.Fatalf("write %s failed: %v", dstPath, err)
+		}
+	}
 }
 
 func performJSONRequest(t *testing.T, s *Server, method, path string, body interface{}) *httptest.ResponseRecorder {
@@ -334,6 +393,33 @@ func TestSpawnAndApplyClaude(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "base=https://anthropic-proxy.example.com") {
 		t.Fatalf("expected ANTHROPIC_BASE_URL in log, got %s", string(raw))
+	}
+}
+
+func TestServerSpawnApplyClaudeWithAgentProfile(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	t.Setenv("VMDOCKER_RUNTIME_WORKSPACE", runtimeRoot)
+	t.Setenv("VMDOCKER_AGENT_PROFILE", "claude")
+
+	cliPath := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(cliPath, []byte("#!/bin/sh\nprintf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"server profile ok\",\"session_id\":\"sess-server\"}'\n"), 0o755); err != nil {
+		t.Fatalf("write fake claude failed: %v", err)
+	}
+
+	t.Setenv("CLAUDE_CODE_BIN", cliPath)
+
+	s := setupTestServer(t)
+	w := performRawJSONRequest(s, http.MethodPost, "/vmm/spawn", `{"Pid":"pid","Owner":"owner","CuAddr":"cu","Evn":{},"Tags":[]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("spawn code = %d body=%s", w.Code, w.Body.String())
+	}
+
+	w = performRawJSONRequest(s, http.MethodPost, "/vmm/apply", `{"From":"target-1","Meta":{"Action":"Chat"},"Params":{"Command":"hello"}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("apply code = %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "server profile ok") {
+		t.Fatalf("expected reply in body, got %s", w.Body.String())
 	}
 }
 

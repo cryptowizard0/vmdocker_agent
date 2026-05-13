@@ -64,6 +64,9 @@ func newRuntime(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag
 
 	prof, err := profile.Load(profileDir, selectedProfile)
 	if err != nil {
+		if os.Getenv(profile.EnvAgentProfile) == "" && os.Getenv(profile.EnvRuntimeType) != "" && selectedProfile == os.Getenv(profile.EnvRuntimeType) {
+			return nil, fmt.Errorf("runtime type not supported: %s", selectedProfile)
+		}
 		return nil, err
 	}
 	harnessCtx, err := harness.Init(prof, os.Getenv)
