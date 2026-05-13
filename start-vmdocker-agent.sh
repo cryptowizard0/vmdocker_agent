@@ -2,7 +2,28 @@
 set -eu
 
 APP_ROOT="${VMDOCKER_AGENT_APP_ROOT:-/app}"
-BOOTSTRAP_DIR="${VMDOCKER_AGENT_BOOTSTRAP_DIR:-/usr/local/lib/vmdocker-agent/bootstrap}"
+ASSET_ROOT="${VMDOCKER_AGENT_ASSET_ROOT:-${VMDOCKER_RUNTIME_WORKSPACE:-}/.vmdocker-agent}"
+if [ "${ASSET_ROOT}" = "/.vmdocker-agent" ]; then
+    ASSET_ROOT=""
+fi
+BUNDLE_ROOT="${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}"
+if [ -n "${ASSET_ROOT}" ] && [ -d "${BUNDLE_ROOT}" ] && [ ! -x "${ASSET_ROOT}/bin/start-vmdocker-agent.sh" ]; then
+    mkdir -p "${ASSET_ROOT}"
+    cp -R "${BUNDLE_ROOT}/." "${ASSET_ROOT}/"
+    if [ -f "${ASSET_ROOT}/bin/start-vmdocker-agent.sh" ]; then
+        chmod +x "${ASSET_ROOT}/bin/start-vmdocker-agent.sh"
+    fi
+    if [ -d "${ASSET_ROOT}/bootstrap" ]; then
+        chmod +x "${ASSET_ROOT}"/bootstrap/*.sh 2>/dev/null || true
+    fi
+fi
+if [ -n "${VMDOCKER_AGENT_BOOTSTRAP_DIR:-}" ]; then
+    BOOTSTRAP_DIR="${VMDOCKER_AGENT_BOOTSTRAP_DIR}"
+elif [ -n "${ASSET_ROOT}" ] && [ -d "${ASSET_ROOT}/bootstrap" ]; then
+    BOOTSTRAP_DIR="${ASSET_ROOT}/bootstrap"
+else
+    BOOTSTRAP_DIR="/usr/local/lib/vmdocker-agent/bootstrap"
+fi
 BACKGROUND_PIDS=""
 
 entry_info() {

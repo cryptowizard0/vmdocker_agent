@@ -78,6 +78,30 @@ run_entrypoint() {
   sh "${ENTRYPOINT}"
 }
 
+run_entrypoint_from_workspace_asset() {
+  local runtime="$1"
+  local asset_root="$2"
+  TRACE_FILE="${TRACE_FILE}" \
+  VMDOCKER_AGENT_APP_ROOT="${APP_DIR}" \
+  VMDOCKER_RUNTIME_WORKSPACE="${TMPDIR_ROOT}/runtime" \
+  VMDOCKER_AGENT_ASSET_ROOT="${asset_root}" \
+  RUNTIME_TYPE="${runtime}" \
+  sh "${ENTRYPOINT}"
+}
+
+run_entrypoint_with_bundle() {
+  local runtime="$1"
+  local asset_root="$2"
+  local bundle_root="$3"
+  TRACE_FILE="${TRACE_FILE}" \
+  VMDOCKER_AGENT_APP_ROOT="${APP_DIR}" \
+  VMDOCKER_RUNTIME_WORKSPACE="${TMPDIR_ROOT}/runtime" \
+  VMDOCKER_AGENT_ASSET_ROOT="${asset_root}" \
+  VMDOCKER_AGENT_BUNDLE_ROOT="${bundle_root}" \
+  RUNTIME_TYPE="${runtime}" \
+  sh "${ENTRYPOINT}"
+}
+
 : > "${TRACE_FILE}"
 run_entrypoint openclaw
 assert_contains "${TRACE_FILE}" "hook:openclaw"
@@ -100,6 +124,47 @@ assert_not_contains "${TRACE_FILE}" "hook:claude"
 run_entrypoint test
 assert_contains "${TRACE_FILE}" "main:test"
 assert_not_contains "${TRACE_FILE}" "hook:"
+
+ASSET_ROOT="${TMPDIR_ROOT}/runtime/.vmdocker-agent"
+mkdir -p "${ASSET_ROOT}/bootstrap"
+cp "${HOOKS_DIR}/claude.sh" "${ASSET_ROOT}/bootstrap/claude.sh"
+chmod +x "${ASSET_ROOT}/bootstrap/claude.sh"
+
+: > "${TRACE_FILE}"
+run_entrypoint_from_workspace_asset claude "${ASSET_ROOT}"
+assert_contains "${TRACE_FILE}" "hook:claude"
+assert_contains "${TRACE_FILE}" "main:claude"
+
+BUNDLE_ROOT="${TMPDIR_ROOT}/bundle"
+MATERIALIZED_ASSET_ROOT="${TMPDIR_ROOT}/materialized/.vmdocker-agent"
+mkdir -p "${BUNDLE_ROOT}/bootstrap"
+cp "${HOOKS_DIR}/telegramcustomer.sh" "${BUNDLE_ROOT}/bootstrap/telegramcustomer.sh"
+chmod +x "${BUNDLE_ROOT}/bootstrap/telegramcustomer.sh"
+
+: > "${TRACE_FILE}"
+run_entrypoint_with_bundle telegramcustomer "${MATERIALIZED_ASSET_ROOT}" "${BUNDLE_ROOT}"
+assert_contains "${TRACE_FILE}" "hook:telegramcustomer"
+assert_contains "${TRACE_FILE}" "main:telegramcustomer"
+test -x "${MATERIALIZED_ASSET_ROOT}/bootstrap/telegramcustomer.sh"
+
+mkdir -p "${ASSET_ROOT}/bin"
+cat > "${ASSET_ROOT}/bin/start-vmdocker-agent.sh" <<'EOF'
+#!/bin/sh
+EOF
+chmod +x "${ASSET_ROOT}/bin/start-vmdocker-agent.sh"
+cat > "${BUNDLE_ROOT}/bootstrap/claude.sh" <<'EOF'
+#!/bin/sh
+bootstrap_claude_main() {
+    printf 'hook:bundle-claude\n' >> "${TRACE_FILE}"
+}
+bootstrap_claude_main "$@"
+EOF
+chmod +x "${BUNDLE_ROOT}/bootstrap/claude.sh"
+
+: > "${TRACE_FILE}"
+run_entrypoint_with_bundle claude "${ASSET_ROOT}" "${BUNDLE_ROOT}"
+assert_contains "${TRACE_FILE}" "hook:claude"
+assert_not_contains "${TRACE_FILE}" "hook:bundle-claude"
 
 if VMDOCKER_AGENT_APP_ROOT="${APP_DIR}" VMDOCKER_AGENT_BOOTSTRAP_DIR="${HOOKS_DIR}" RUNTIME_TYPE="unknown" sh "${ENTRYPOINT}" >"${TMPDIR_ROOT}/unknown.out" 2>"${TMPDIR_ROOT}/unknown.err"; then
   echo "[ERROR] expected unknown runtime to fail"

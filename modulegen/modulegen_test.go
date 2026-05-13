@@ -1,6 +1,7 @@
 package modulegen
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -70,5 +71,23 @@ func TestGenerateModuleArtifactBaseTagsDoNotIncludeRuntimeBackend(t *testing.T) 
 
 	if len(want) != 0 {
 		t.Fatalf("missing expected base tags: %v", want)
+	}
+}
+
+func TestDefaultStartCommandUsesWorkspaceAssetRoot(t *testing.T) {
+	required := []string{
+		"VMDOCKER_RUNTIME_WORKSPACE",
+		"VMDOCKER_AGENT_ASSET_ROOT",
+		"VMDOCKER_AGENT_BUNDLE_ROOT",
+		".vmdocker-agent",
+		"bin/start-vmdocker-agent.sh",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(DefaultStartCommand, fragment) {
+			t.Fatalf("DefaultStartCommand missing %q: %s", fragment, DefaultStartCommand)
+		}
+	}
+	if strings.Contains(DefaultStartCommand, "/usr/local/bin/start-vmdocker-agent.sh") {
+		t.Fatalf("DefaultStartCommand still uses the old /usr/local binary contract: %s", DefaultStartCommand)
 	}
 }

@@ -24,7 +24,7 @@ import (
 const (
 	DefaultSandboxAgent        = "shell"
 	DefaultOpenclawVersion     = "2026.3.1-beta.1"
-	DefaultStartCommand        = "/usr/local/bin/start-vmdocker-agent.sh"
+	DefaultStartCommand        = `sh -lc 'asset_root="${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}"; bundle_root="${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}"; if [ ! -x "$asset_root/bin/start-vmdocker-agent.sh" ] && [ -d "$bundle_root" ]; then mkdir -p "$asset_root"; cp -R "$bundle_root/." "$asset_root/"; chmod +x "$asset_root/bin/start-vmdocker-agent.sh"; fi; exec "$asset_root/bin/start-vmdocker-agent.sh"'`
 	ModuleFormat               = "hymx.vmdocker.v0.0.1"
 	ImageSourceTag             = "Image-Source"
 	ImageArchiveTag            = "Image-Archive-Format"
