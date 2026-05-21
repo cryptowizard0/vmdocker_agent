@@ -11,7 +11,7 @@ COPY . .
 RUN go mod edit -replace github.com/xingj404-lab/agent-hub=/tmp/agent-hub
 RUN CGO_ENABLED=0 go build -o /app/main .
 
-FROM my-hermes:lite
+FROM sandytest456/hermes-agent:latest
 
 USER root
 WORKDIR /app
