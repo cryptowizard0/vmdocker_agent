@@ -3,15 +3,15 @@ FROM golang:1.25 AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
-COPY --from=claude_gw / /tmp/claude-gw
-RUN go mod edit -replace github.com/xingj404-lab/claude-gw=/tmp/claude-gw
+COPY --from=agent_hub / /tmp/agent-hub
+RUN go mod edit -replace github.com/xingj404-lab/agent-hub=/tmp/agent-hub
 RUN go mod download
 
 COPY . .
-RUN go mod edit -replace github.com/xingj404-lab/claude-gw=/tmp/claude-gw
+RUN go mod edit -replace github.com/xingj404-lab/agent-hub=/tmp/agent-hub
 RUN CGO_ENABLED=0 go build -o /app/main .
 
-FROM docker/sandbox-templates:claude-code
+FROM my-hermes:lite
 
 USER root
 WORKDIR /app
@@ -33,30 +33,14 @@ RUN set -eux; \
     fi
 
 RUN set -eux; \
-    usermod -G agent agent; \
-    gpasswd -d agent sudo || true; \
-    gpasswd -d agent docker || true; \
-    rm -f /etc/sudoers.d/agent
+    chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh
 
 RUN set -eux; \
-    chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh; \
-    rm -rf /home/agent/workspace; \
-    chown -R agent:agent /app /usr/local/bin/start-vmdocker-agent.sh /usr/local/lib/vmdocker-agent
-
-RUN set -eux; \
-    test ! -e /etc/sudoers.d/agent; \
-    command -v claude >/dev/null 2>&1; \
-    test -x /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh; \
-    if command -v sudo >/dev/null 2>&1; then \
-        su -s /bin/sh agent -c '! sudo -n true'; \
-    fi
+    test -x /usr/local/bin/hermes; \
+    test -x /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh
 
 ENV VMDOCKER_AGENT_APP_ROOT=/app
 ENV RUNTIME_TYPE=telegramcustomer
-ENV HOME=/home/agent
-ENV NODE_OPTIONS=--use-env-proxy
-
-USER agent
 WORKDIR /workspace
 
 ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]

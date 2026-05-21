@@ -6,43 +6,46 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/cryptowizard0/vmdocker_agent/common"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
-	customer "github.com/xingj404-lab/claude-gw/tg-customer"
+	customer "github.com/xingj404-lab/agent-hub/tgcustomer"
 )
 
-const (
-	checkpointFormatV1  = "telegramcustomer.runtime.v1"
-	defaultTimeout      = 10 * time.Minute
-	defaultClaudeBinary = "claude"
-)
+const checkpointFormatV1 = "telegramcustomer.runtime.v1"
 
 var log = common.NewLog("tgcustomer")
+var csTg *customer.Customer
+
+// RunByHymx is the entry point for launching the customer service.
+// Exposed as a var for test mocking.
 var RunByHymx = customer.RunByHymx
 
+// Config holds all persistent settings for the telegram customer runtime.
+// These values are saved to checkpoint and restored on restart.
 type Config struct {
-	Binary   string
-	APIKey   string
-	BaseURL  string
-	Model    string
-	Flags    []string
-	Cwd      string
-	Timeout  time.Duration
-	BotToken string
+	Cwd         string
+	BotToken    string
+	LLMProvider string
+	LLMBaseURL  string
+	LLMApiKey   string
+	LLMModel    string
+	Running     bool // true if customer was running at last checkpoint
 }
 
 type checkpointState struct {
-	Format    string `json:"format"`
-	SessionID string `json:"sessionId,omitempty"`
-	Cwd       string `json:"cwd,omitempty"`
-	Model     string `json:"model,omitempty"`
-	BaseURL   string `json:"baseURL,omitempty"`
+	Format      string `json:"format"`
+	SessionID   string `json:"sessionId,omitempty"`
+	Cwd         string `json:"cwd,omitempty"`
+	BotToken    string `json:"botToken,omitempty"`
+	LLMProvider string `json:"llmProvider,omitempty"`
+	LLMBaseURL  string `json:"llmBaseURL,omitempty"`
+	LLMApiKey   string `json:"llmApiKey,omitempty"`
+	LLMModel    string `json:"llmModel,omitempty"`
+	Running     bool   `json:"running,omitempty"`
 }
 
 type Runtime struct {
@@ -56,20 +59,13 @@ func NewWithParams(spawnParams map[string]string) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	homeDir := strings.TrimSpace(os.Getenv("VMDOCKER_RUNTIME_HOME"))
-	homeDir, _ = filepath.Abs(homeDir)
 
-	if err = RunByHymx(cfg.Cwd, homeDir, cfg.BotToken); err != nil {
-		return nil, err
-	}
 	return &Runtime{
 		config: cfg,
 		state: checkpointState{
 			Format:    checkpointFormatV1,
 			SessionID: newSessionID(),
 			Cwd:       cfg.Cwd,
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
 		},
 	}, nil
 }
@@ -82,34 +78,21 @@ func NewRestored(state string, spawnParams map[string]string) (*Runtime, error) 
 
 	rt := &Runtime{
 		config: cfg,
-		state: checkpointState{
-			Format:  checkpointFormatV1,
-			Cwd:     cfg.Cwd,
-			Model:   cfg.Model,
-			BaseURL: cfg.BaseURL,
-		},
 	}
 	if err := rt.Restore(state); err != nil {
 		return nil, err
 	}
-	homeDir := strings.TrimSpace(os.Getenv("VMDOCKER_RUNTIME_HOME"))
-	homeDir, _ = filepath.Abs(homeDir)
 
-	if err = RunByHymx(cfg.Cwd, homeDir, cfg.BotToken); err != nil {
-		return nil, err
+	// 如果 checkpoint 记录 customer 正在运行，则自动拉起
+	if rt.config.Running && rt.config.BotToken != "" {
+		if err := startCustomer(rt.config); err != nil {
+			return nil, err
+		}
 	}
 	return rt, nil
 }
 
 func loadConfig(spawnParams map[string]string) (Config, error) {
-	binary := strings.TrimSpace(os.Getenv("CLAUDE_CODE_BIN"))
-	if binary == "" {
-		binary = defaultClaudeBinary
-	}
-	if _, err := exec.LookPath(binary); err != nil {
-		return Config{}, fmt.Errorf("find claude binary %s failed: %w", binary, err)
-	}
-
 	cwd := strings.TrimSpace(os.Getenv("VMDOCKER_AGENT_WORKSPACE"))
 	if cwd == "" {
 		cwd = strings.TrimSpace(os.Getenv("VMDOCKER_RUNTIME_WORKSPACE"))
@@ -129,135 +112,145 @@ func loadConfig(spawnParams map[string]string) (Config, error) {
 		return Config{}, fmt.Errorf("resolve runtime workspace %s failed: %w", cwd, err)
 	}
 
-	model := strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL"))
-	if model == "" {
-		model = strings.TrimSpace(os.Getenv("CLAUDE_MODEL"))
-	}
-	if model == "" {
-		model = extractModelName(spawnParams)
-	}
-
-	flags, err := parseFlags(os.Getenv("CLAUDE_CODE_FLAGS"))
-	if err != nil {
-		return Config{}, err
-	}
-
-	botToken := strings.TrimSpace(os.Getenv("BOT_TOKEN"))
-	if botToken == "" {
-		botToken = extractBotToken(spawnParams)
-	}
-	if botToken == "" {
-		return Config{}, fmt.Errorf("BOT_TOKEN is required, set via BOT_TOKEN env or botToken tag")
-	}
-
 	return Config{
-		Binary:   binary,
-		APIKey:   strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
-		BaseURL:  strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")),
-		Model:    model,
-		Flags:    flags,
-		Cwd:      cwd,
-		Timeout:  resolveTimeout(),
-		BotToken: botToken,
+		Cwd: cwd,
 	}, nil
 }
 
-func resolveTimeout() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("CLAUDE_CODE_TIMEOUT_MS"))
-	if raw == "" {
-		return defaultTimeout
+// resolveHomeDir returns the home directory for skill installation.
+// Prefers VMDOCKER_RUNTIME_HOME if set, falls back to $HOME.
+func resolveHomeDir() string {
+	homeDir := strings.TrimSpace(os.Getenv("VMDOCKER_RUNTIME_HOME"))
+	if homeDir == "" {
+		homeDir = strings.TrimSpace(os.Getenv("HOME"))
 	}
-	timeoutMs, err := strconv.Atoi(raw)
-	if err != nil || timeoutMs <= 0 {
-		return defaultTimeout
-	}
-	return time.Duration(timeoutMs) * time.Millisecond
+	homeDir, _ = filepath.Abs(homeDir)
+	return homeDir
 }
 
-func parseFlags(raw string) ([]string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
+// startCustomer configures hermes LLM and launches the customer service.
+func startCustomer(cfg Config) error {
+	if cfg.BotToken == "" {
+		return fmt.Errorf("bot_token is required")
+	}
+	if cfg.LLMModel == "" {
+		return fmt.Errorf("LLM_MODEL is required")
 	}
 
-	args := make([]string, 0, 4)
-	var current strings.Builder
-	var quote rune
-	escaped := false
-
-	flush := func() {
-		if current.Len() == 0 {
-			return
-		}
-		args = append(args, current.String())
-		current.Reset()
+	if err := configureHermesModel(cfg.LLMProvider, cfg.LLMBaseURL, cfg.LLMApiKey, cfg.LLMModel); err != nil {
+		return err
 	}
 
-	for _, r := range raw {
-		switch {
-		case escaped:
-			current.WriteRune(r)
-			escaped = false
-		case r == '\\':
-			escaped = true
-		case quote != 0:
-			if r == quote {
-				quote = 0
-				continue
-			}
-			current.WriteRune(r)
-		case r == '\'' || r == '"':
-			quote = r
-		case unicode.IsSpace(r):
-			flush()
-		default:
-			current.WriteRune(r)
-		}
-	}
-
-	if escaped {
-		return nil, fmt.Errorf("parse CLAUDE_CODE_FLAGS failed: trailing escape")
-	}
-	if quote != 0 {
-		return nil, fmt.Errorf("parse CLAUDE_CODE_FLAGS failed: unterminated quote")
-	}
-	flush()
-	return args, nil
+	var err error
+	csTg, err = RunByHymx(cfg.Cwd, resolveHomeDir(), cfg.BotToken)
+	return err
 }
 
-func extractModelName(params map[string]string) string {
-	if params == nil {
-		return ""
+// configureHermesModel sets hermes LLM provider config via CLI.
+func configureHermesModel(provider, baseURL, apiKey, model string) error {
+	cmds := []struct {
+		key   string
+		value string
+	}{
+		{"model.provider", provider},
+		{"model.base_url", baseURL},
+		{"model.api_key", apiKey},
+		{"model.default", model},
 	}
-	for _, key := range []string{"model", "Model", "modelName", "ModelName"} {
-		if value := strings.TrimSpace(params[key]); value != "" {
-			return value
+
+	for _, cmd := range cmds {
+		if cmd.value == "" {
+			continue
 		}
+		out, err := exec.Command("hermes", "config", "set", cmd.key, cmd.value).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("hermes config set %s failed: %s: %w", cmd.key, string(out), err)
+		}
+		log.Info("hermes config set", "key", cmd.key)
 	}
-	return ""
+	return nil
 }
 
-func extractBotToken(params map[string]string) string {
-	if params == nil {
-		return ""
-	}
-	for _, key := range []string{"botToken", "BotToken", "bot_token"} {
-		if value := strings.TrimSpace(params[key]); value != "" {
-			return value
+func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]string) (res vmmSchema.Result, err error) {
+	switch meta.Action {
+	case "start":
+		if csTg != nil {
+			res.Error = fmt.Errorf("a customer is already running, send stop first")
+			return res, nil
 		}
-	}
-	return ""
-}
 
-func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]string) (vmmSchema.Result, error) {
+		provider := params["LLM_PROVIDER"]
+		if provider == "" {
+			provider = "custom"
+		}
+		baseURL := params["LLM_BASE_URL"]
+		if baseURL == "" {
+			res.Error = fmt.Errorf("LLM_BASE_URL is required")
+			return res, nil
+		}
+		apiKey := params["LLM_API_KEY"]
+		if apiKey == "" {
+			res.Error = fmt.Errorf("LLM_API_KEY is required")
+			return res, nil
+		}
+		model := params["LLM_MODEL"]
+		if model == "" {
+			res.Error = fmt.Errorf("LLM_MODEL is required")
+			return res, nil
+		}
+		botToken := params["Bot_Token"]
+		if botToken == "" {
+			res.Error = fmt.Errorf("bot_token is required")
+			return res, nil
+		}
+
+		// 保存到 config 以便 checkpoint/restore
+		r.mu.Lock()
+		r.config.LLMProvider = provider
+		r.config.LLMBaseURL = baseURL
+		r.config.LLMApiKey = apiKey
+		r.config.LLMModel = model
+		r.config.BotToken = botToken
+		r.config.Running = true
+		r.mu.Unlock()
+
+		if err := startCustomer(r.config); err != nil {
+			res.Error = err
+			return res, nil
+		}
+		return res, nil
+	case "stop":
+		if csTg == nil {
+			res.Error = fmt.Errorf("no customer is running")
+			return res, nil
+		}
+		csTg.Close()
+		csTg = nil
+
+		// 记录停止状态，checkpoint 后 restore 时不再自动启动
+		r.mu.Lock()
+		r.config.Running = false
+		r.mu.Unlock()
+		return res, nil
+	}
 	return vmmSchema.Result{}, fmt.Errorf("telegramcustomer apply is not implemented")
 }
 
 func (r *Runtime) Checkpoint() (string, error) {
 	r.mu.RLock()
-	state := r.state
+	cfg := r.config
 	r.mu.RUnlock()
-	state.Format = checkpointFormatV1
+
+	state := checkpointState{
+		Format:      checkpointFormatV1,
+		Cwd:         cfg.Cwd,
+		BotToken:    cfg.BotToken,
+		LLMProvider: cfg.LLMProvider,
+		LLMBaseURL:  cfg.LLMBaseURL,
+		LLMApiKey:   cfg.LLMApiKey,
+		LLMModel:    cfg.LLMModel,
+		Running:     cfg.Running,
+	}
 
 	payload, err := json.Marshal(state)
 	if err != nil {
@@ -282,23 +275,16 @@ func (r *Runtime) Restore(data string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.state.Format = checkpointFormatV1
-	r.state.SessionID = strings.TrimSpace(state.SessionID)
-	if strings.TrimSpace(r.config.Cwd) != "" {
-		r.state.Cwd = r.config.Cwd
-	} else {
-		r.state.Cwd = strings.TrimSpace(state.Cwd)
-	}
-	if strings.TrimSpace(r.config.Model) != "" {
-		r.state.Model = r.config.Model
-	} else {
-		r.state.Model = strings.TrimSpace(state.Model)
-	}
-	if strings.TrimSpace(r.config.BaseURL) != "" {
-		r.state.BaseURL = r.config.BaseURL
-	} else {
-		r.state.BaseURL = strings.TrimSpace(state.BaseURL)
-	}
+	r.state = state
+
+	r.config.Cwd = strings.TrimSpace(state.Cwd)
+	r.config.BotToken = strings.TrimSpace(state.BotToken)
+	r.config.LLMProvider = strings.TrimSpace(state.LLMProvider)
+	r.config.LLMBaseURL = strings.TrimSpace(state.LLMBaseURL)
+	r.config.LLMApiKey = strings.TrimSpace(state.LLMApiKey)
+	r.config.LLMModel = strings.TrimSpace(state.LLMModel)
+	r.config.Running = state.Running
+
 	return nil
 }
 

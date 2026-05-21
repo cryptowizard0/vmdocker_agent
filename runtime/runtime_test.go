@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	customer "github.com/xingj404-lab/agent-hub/tgcustomer"
+
 	schema "github.com/cryptowizard0/vmdocker_agent/runtime/openclaw/schema"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/telegramcustomer"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
@@ -161,14 +163,9 @@ func TestNewRestoredRuntimeClaude(t *testing.T) {
 func TestNewRuntimeTelegramCustomer(t *testing.T) {
 	workspace := t.TempDir()
 	homeDir := t.TempDir()
-	cliPath := filepath.Join(t.TempDir(), "claude")
-	script := "#!/bin/sh\nexit 0\n"
-	if err := os.WriteFile(cliPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake claude failed: %v", err)
-	}
 
 	originalRunByHymx := telegramcustomer.RunByHymx
-	telegramcustomer.RunByHymx = func(workspaceDir, runtimeHomeDir, botToken string) error {
+	telegramcustomer.RunByHymx = func(workspaceDir, runtimeHomeDir, botToken string) (*customer.Customer, error) {
 		if workspaceDir != workspace {
 			t.Fatalf("expected workspace %q, got %q", workspace, workspaceDir)
 		}
@@ -178,14 +175,13 @@ func TestNewRuntimeTelegramCustomer(t *testing.T) {
 		if botToken != "bot-token" {
 			t.Fatalf("expected bot token to be forwarded")
 		}
-		return nil
+		return nil, nil
 	}
 	defer func() {
 		telegramcustomer.RunByHymx = originalRunByHymx
 	}()
 
 	t.Setenv("RUNTIME_TYPE", RuntimeTypeTelegramCustomer)
-	t.Setenv("CLAUDE_CODE_BIN", cliPath)
 	t.Setenv("VMDOCKER_AGENT_WORKSPACE", workspace)
 	t.Setenv("VMDOCKER_RUNTIME_HOME", homeDir)
 	t.Setenv("BOT_TOKEN", "bot-token")
