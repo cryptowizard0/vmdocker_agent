@@ -171,6 +171,236 @@ func configureHermesModel(provider, baseURL, apiKey, model string) error {
 	return nil
 }
 
+// hermesAllowedCmds is a whitelist of hermes CLI subcommands that are
+// non-interactive and return results immediately. Commands not listed here
+// are rejected to prevent hanging processes (e.g. chat, dashboard) or
+// interactive flows (e.g. login, setup).
+var hermesAllowedCmds = map[string]bool{
+	// config
+	"config:":         true,
+	"config:show":     true,
+	"config:set":      true,
+	"config:path":     true,
+	"config:env-path": true,
+	"config:check":    true,
+	"config:migrate":  true,
+
+	// status / version / dump / doctor
+	"status":  true,
+	"version": true,
+	"dump":    true,
+	"doctor":  true,
+
+	// sessions
+	"sessions:list":   true,
+	"sessions:export": true,
+	"sessions:delete": true,
+	"sessions:prune":  true,
+	"sessions:stats":  true,
+	"sessions:rename": true,
+
+	// logs (only without -f)
+	"logs": true,
+
+	// insights
+	"insights": true,
+
+	// cron
+	"cron:list":   true,
+	"cron:create": true,
+	"cron:add":    true,
+	"cron:edit":   true,
+	"cron:pause":  true,
+	"cron:resume": true,
+	"cron:run":    true,
+	"cron:remove": true,
+	"cron:rm":     true,
+	"cron:delete": true,
+	"cron:status": true,
+	"cron:tick":   true,
+
+	// hooks
+	"hooks:list":   true,
+	"hooks:ls":     true,
+	"hooks:test":   true,
+	"hooks:revoke": true,
+	"hooks:remove": true,
+	"hooks:rm":     true,
+	"hooks:doctor": true,
+
+	// skills
+	"skills:search":    true,
+	"skills:install":   true,
+	"skills:inspect":   true,
+	"skills:list":      true,
+	"skills:check":     true,
+	"skills:update":    true,
+	"skills:audit":     true,
+	"skills:uninstall": true,
+	"skills:reset":     true,
+	"skills:publish":   true,
+	"skills:snapshot":  true,
+	"skills:tap":       true,
+
+	// profile
+	"profile:list":    true,
+	"profile:use":     true,
+	"profile:create":  true,
+	"profile:delete":  true,
+	"profile:show":    true,
+	"profile:alias":   true,
+	"profile:rename":  true,
+	"profile:export":  true,
+	"profile:import":  true,
+	"profile:install": true,
+	"profile:update":  true,
+	"profile:info":    true,
+
+	// auth
+	"auth:list":   true,
+	"auth:remove": true,
+	"auth:reset":  true,
+	"auth:status": true,
+	"auth:logout": true,
+
+	// mcp
+	"mcp:list": true,
+	"mcp:ls":   true,
+	"mcp:test": true,
+
+	// webhook
+	"webhook:list":   true,
+	"webhook:ls":     true,
+	"webhook:remove": true,
+	"webhook:rm":     true,
+	"webhook:test":   true,
+
+	// gateway
+	"gateway:status": true,
+	"gateway:list":   true,
+
+	// fallback
+	"fallback:list": true,
+	"fallback:ls":   true,
+
+	// update (--check only, bare update would be destructive)
+	"update:check": true,
+
+	// tools
+	"tools:list":    true,
+	"tools:summary": true,
+
+	// plugins
+	"plugins:list": true,
+	"plugins:ls":   true,
+
+	// checkpoints
+	"checkpoints:status":       true,
+	"checkpoints:list":         true,
+	"checkpoints:prune":        true,
+	"checkpoints:clear":        true,
+	"checkpoints:clear-legacy": true,
+
+	// backup / debug
+	"backup":      true,
+	"debug:share": true,
+
+	// lsp
+	"lsp:status": true,
+	"lsp:list":   true,
+	"lsp:which":  true,
+
+	// memory
+	"memory:status": true,
+
+	// computer-use
+	"computer-use:status": true,
+
+	// dashboard
+	"dashboard:status": true,
+
+	// kanban (non-streaming subcommands)
+	"kanban:init":        true,
+	"kanban:boards":      true,
+	"kanban:create":      true,
+	"kanban:list":        true,
+	"kanban:ls":          true,
+	"kanban:show":        true,
+	"kanban:assign":      true,
+	"kanban:reclaim":     true,
+	"kanban:reassign":    true,
+	"kanban:diagnostics": true,
+	"kanban:diag":        true,
+	"kanban:link":        true,
+	"kanban:unlink":      true,
+	"kanban:comment":     true,
+	"kanban:complete":    true,
+	"kanban:edit":        true,
+	"kanban:block":       true,
+	"kanban:unblock":     true,
+	"kanban:archive":     true,
+	"kanban:stats":       true,
+	"kanban:log":         true,
+	"kanban:runs":        true,
+	"kanban:heartbeat":   true,
+	"kanban:assignees":   true,
+	"kanban:context":     true,
+	"kanban:specify":     true,
+	"kanban:gc":          true,
+
+	// curator
+	"curator:status":        true,
+	"curator:run":           true,
+	"curator:pause":         true,
+	"curator:resume":        true,
+	"curator:pin":           true,
+	"curator:unpin":         true,
+	"curator:list-archived": true,
+	"curator:archive":       true,
+	"curator:prune":         true,
+	"curator:backup":        true,
+	"curator:rollback":      true,
+}
+
+// validateHermesCmd checks if a command line is allowed by the whitelist.
+// It requires the command to start with "hermes", then looks up the
+// top-level subcommand + optional second-level subcommand in the allowed set.
+// Returns the actual exec args (everything after "hermes") on success, or
+// a rejection error for interactive/long-running commands.
+func validateHermesCmd(cmd string) ([]string, error) {
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("call is required")
+	}
+	if parts[0] != "hermes" {
+		return nil, fmt.Errorf("only hermes CLI commands are allowed, got: %s", parts[0])
+	}
+	if len(parts) < 2 {
+		// bare "hermes" enters interactive chat — reject
+		return nil, fmt.Errorf("hermes requires a subcommand (e.g. hermes status, hermes config show)")
+	}
+
+	top := parts[1]
+	sub := ""
+	if len(parts) > 2 {
+		sub = parts[2]
+	}
+
+	// Try top:sub first, then fall back to top: (prefix match)
+	if hermesAllowedCmds[top+":"+sub] {
+		return parts[1:], nil
+	}
+	if hermesAllowedCmds[top+":"] {
+		return parts[1:], nil
+	}
+	// No subcommand at all — try bare top-level
+	if hermesAllowedCmds[top] {
+		return parts[1:], nil
+	}
+
+	return nil, fmt.Errorf("hermes command %s is not allowed (interactive or long-running commands are blocked)", cmd)
+}
+
 func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]string) (res vmmSchema.Result, err error) {
 	switch meta.Action {
 	case "start":
@@ -232,6 +462,27 @@ func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]stri
 		r.config.Running = false
 		r.mu.Unlock()
 		return res, nil
+	case "call_hermes":
+		cmd := params["call"]
+		if cmd == "" {
+			res.Error = fmt.Errorf("call is required")
+			return res, nil
+		}
+
+		args, err := validateHermesCmd(cmd)
+		if err != nil {
+			res.Error = err
+			return res, nil
+		}
+
+		out, err := exec.Command("hermes", args...).CombinedOutput()
+		if err != nil {
+			res.Error = fmt.Errorf("call hermes failed: %s: %w", string(out), err)
+			return res, nil
+		}
+		res.Data = string(out)
+		return res, nil
+
 	}
 	return vmmSchema.Result{}, fmt.Errorf("telegramcustomer apply is not implemented")
 }
