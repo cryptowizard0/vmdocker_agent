@@ -141,6 +141,11 @@ func startCustomer(cfg Config) error {
 		return err
 	}
 
+	// 关闭 browser 工具，客服场景不需要浏览器控制
+	if out, err := exec.Command("hermes", "tools", "disable", "browser").CombinedOutput(); err != nil {
+		return fmt.Errorf("hermes tools disable browser failed: %s: %w", string(out), err)
+	}
+
 	var err error
 	csTg, err = RunByHymx(cfg.Cwd, resolveHomeDir(), cfg.BotToken)
 	return err
