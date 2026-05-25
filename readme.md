@@ -11,6 +11,9 @@ More about HyMatrix & Vmdocker:
 > - [HyMatrix Website](https://hymatrix.com/)
 > - [HyMatrix Documentation](https://docs.hymatrix.com/)
 
+Developer guide for the Claude runtime:
+> - [Claude Runtime Developer Guide](/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/docs/claude-runtime.md)
+
 ## 🚀 Features
 
 - **Runtime Modes**: Supports profile-driven `openclaw`, `claude`, `telegramcustomer`, and in-memory `test` runtimes

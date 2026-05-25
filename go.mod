@@ -74,5 +74,3 @@ require (
 	gopkg.in/h2non/gentleman.v2 v2.0.5 // indirect
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
-
-replace github.com/xingj404-lab/claude-gw => /Users/sandyzhou/codex-project/claude-gw
