@@ -9,6 +9,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/hymatrix/hymx v0.4.9-0.20260513060807-4ce13eab9831
 	github.com/inconshreveable/log15 v2.16.0+incompatible
+	github.com/pelletier/go-toml/v2 v2.3.0
 	github.com/permadao/goar v1.1.1
 	github.com/xingj404-lab/agent-hub v0.0.1
 )
@@ -63,7 +64,6 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/panjf2000/ants/v2 v2.11.3 // indirect
-	github.com/pelletier/go-toml/v2 v2.3.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect

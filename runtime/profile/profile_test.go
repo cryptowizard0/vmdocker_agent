@@ -17,6 +17,16 @@ func TestResolveSelectorPrefersAgentProfile(t *testing.T) {
 	}
 }
 
+func TestResolveSelectorHermesAgentProfile(t *testing.T) {
+	t.Setenv(EnvAgentProfile, "hermes")
+	t.Setenv(EnvRuntimeType, "telegramcustomer")
+
+	got := ResolveSelector(os.Getenv)
+	if got != "hermes" {
+		t.Fatalf("selector = %q, want hermes", got)
+	}
+}
+
 func TestResolveSelectorMapsRuntimeType(t *testing.T) {
 	t.Setenv(EnvAgentProfile, "")
 
@@ -85,6 +95,19 @@ include = ["hymx-runtime"]
 	}
 	if len(got.Skills.Include) != 1 || got.Skills.Include[0] != "hymx-runtime" {
 		t.Fatalf("skills = %#v, want hymx-runtime", got.Skills.Include)
+	}
+}
+
+func TestLoadHermesProfileFromRepo(t *testing.T) {
+	got, err := Load(filepath.Join("..", "..", "harness", "profiles"), "hermes")
+	if err != nil {
+		t.Fatalf("Load hermes failed: %v", err)
+	}
+	if got.Backend != "telegramcustomer-legacy" {
+		t.Fatalf("backend = %q, want telegramcustomer-legacy", got.Backend)
+	}
+	if got.Env["RUNTIME_TYPE"] != "telegramcustomer" {
+		t.Fatalf("RUNTIME_TYPE = %q, want telegramcustomer", got.Env["RUNTIME_TYPE"])
 	}
 }
 

@@ -12,10 +12,12 @@ type Manifest struct {
 	Name           string            `toml:"name"`
 	RuntimeProfile string            `toml:"runtime_profile"`
 	Dockerfile     string            `toml:"dockerfile"`
+	Context        string            `toml:"context"`
 	ImageName      string            `toml:"image_name"`
 	StartCommand   string            `toml:"start_command"`
 	Assets         Assets            `toml:"assets"`
 	Env            map[string]string `toml:"env"`
+	BuildContexts  map[string]string `toml:"build_contexts"`
 	ModuleTags     map[string]string `toml:"module_tags"`
 }
 
@@ -41,7 +43,7 @@ func Load(path string) (Manifest, error) {
 	return manifest, nil
 }
 
-func (m Manifest) Validate() error {
+func (m *Manifest) Validate() error {
 	if strings.TrimSpace(m.Name) == "" {
 		return fmt.Errorf("name is required")
 	}
@@ -50,6 +52,9 @@ func (m Manifest) Validate() error {
 	}
 	if strings.TrimSpace(m.Dockerfile) == "" {
 		return fmt.Errorf("dockerfile is required")
+	}
+	if strings.TrimSpace(m.Context) == "" {
+		m.Context = "."
 	}
 	if strings.TrimSpace(m.ImageName) == "" {
 		return fmt.Errorf("image_name is required")

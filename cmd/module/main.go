@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/cryptowizard0/vmdocker_agent/buildmanifest"
 	"github.com/cryptowizard0/vmdocker_agent/modulegen"
 	"github.com/everFinance/goether"
 	hymxSchema "github.com/hymatrix/hymx/schema"
@@ -18,11 +20,14 @@ import (
 var loadEnvOnce sync.Once
 
 func main() {
+	profile := flag.String("profile", "", "build profile name or manifest path")
+	flag.Parse()
+
 	fmt.Println("[module] loading environment from .env")
 	loadEnv()
 
 	fmt.Println("[module] generating module artifact")
-	artifact, err := modulegen.GenerateModuleArtifact()
+	artifact, err := generateArtifact(*profile)
 	if err != nil {
 		fmt.Printf("generate module artifact failed: %v\n", err)
 		os.Exit(1)
@@ -49,6 +54,27 @@ func main() {
 
 	fmt.Printf("[module] generate and save module success, id %s\n", itemID)
 	fmt.Printf("[module] local bundle file: %s\n", filepath.Join(".", "mod", "mod-"+itemID+".json"))
+}
+
+func generateArtifact(profile string) (modulegen.ModuleArtifact, error) {
+	if strings.TrimSpace(profile) == "" {
+		return modulegen.GenerateModuleArtifact()
+	}
+	profilePath := resolveBuildProfilePath(profile)
+	fmt.Printf("[module] loading build profile %s\n", profilePath)
+	manifest, err := buildmanifest.Load(profilePath)
+	if err != nil {
+		return modulegen.ModuleArtifact{}, err
+	}
+	return modulegen.GenerateModuleArtifactFromManifest(manifest)
+}
+
+func resolveBuildProfilePath(profile string) string {
+	profile = strings.TrimSpace(profile)
+	if strings.HasSuffix(profile, ".toml") || strings.Contains(profile, "/") || strings.Contains(profile, string(filepath.Separator)) {
+		return profile
+	}
+	return filepath.Join("build", "profiles", profile+".toml")
 }
 
 func newSDK() (*sdk.SDK, error) {

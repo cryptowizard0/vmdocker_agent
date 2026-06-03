@@ -38,7 +38,8 @@
 #   BUILD_CONTEXT=.
 #   BUILD_PROGRESS=plain
 #   BUILDER_NAME=hermes-multi
-#   AGENT_HUB_PATH=/Users/sandyzhou/codex-project/agent-hub
+#   GITHUB_TOKEN=<token with github.com/xingj404-lab/agent-hub access>
+#   GH_TOKEN=<fallback token used when GITHUB_TOKEN is unset>
 #
 # Notes:
 #   --load can only load one platform into the local Docker image store.
@@ -56,7 +57,7 @@ LOCAL_PLATFORM="${LOCAL_PLATFORM:-linux/arm64}"
 PUSH_PLATFORMS="${PUSH_PLATFORMS:-linux/amd64,linux/arm64}"
 BUILD_PROGRESS="${BUILD_PROGRESS:-plain}"
 BUILDER_NAME="${BUILDER_NAME:-hermes-multi}"
-AGENT_HUB_PATH="${AGENT_HUB_PATH:-/Users/sandyzhou/codex-project/agent-hub}"
+GOPRIVATE="${GOPRIVATE:-github.com/xingj404-lab/agent-hub}"
 
 MODE="local"
 
@@ -79,7 +80,6 @@ Environment variables:
   IMAGE_TAG=${IMAGE_TAG}
   LOCAL_PLATFORM=${LOCAL_PLATFORM}
   PUSH_PLATFORMS=${PUSH_PLATFORMS}
-  AGENT_HUB_PATH=${AGENT_HUB_PATH}
 EOF
 }
 
@@ -133,13 +133,18 @@ echo "[build-telegramcustomer] platform=${BUILD_PLATFORM}"
 echo "[build-telegramcustomer] image=${IMAGE_NAME}:${IMAGE_TAG}"
 echo "[build-telegramcustomer] dockerfile=${DOCKERFILE_PATH}"
 echo "[build-telegramcustomer] context=${BUILD_CONTEXT}"
-echo "[build-telegramcustomer] agent_hub=${AGENT_HUB_PATH}"
 echo "[build-telegramcustomer] builder=${BUILDER_NAME}"
 echo "[build-telegramcustomer] output=${OUTPUT_DESC}"
 
-if [[ ! -f "${AGENT_HUB_PATH}/go.mod" ]]; then
-    echo "[build-telegramcustomer][error] agent-hub module not found at ${AGENT_HUB_PATH}"
-    exit 1
+SECRET_ARGS=()
+if [[ -z "${GITHUB_TOKEN:-}" && -n "${GH_TOKEN:-}" ]]; then
+    export GITHUB_TOKEN="${GH_TOKEN}"
+fi
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    SECRET_ARGS+=(--secret "id=github_token,env=GITHUB_TOKEN")
+    echo "[build-telegramcustomer] github_token_secret=enabled"
+else
+    echo "[build-telegramcustomer] github_token_secret=disabled"
 fi
 
 if ! docker buildx inspect "${BUILDER_NAME}" >/dev/null 2>&1; then
@@ -158,7 +163,8 @@ docker buildx build \
     --builder "${BUILDER_NAME}" \
     --platform "${BUILD_PLATFORM}" \
     --progress="${BUILD_PROGRESS}" \
-    --build-context "agent_hub=${AGENT_HUB_PATH}" \
+    --build-arg "GOPRIVATE=${GOPRIVATE}" \
+    "${SECRET_ARGS[@]}" \
     -f "${DOCKERFILE_PATH}" \
     -t "${IMAGE_NAME}:${IMAGE_TAG}" \
     "${OUTPUT_FLAG}" \

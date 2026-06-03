@@ -43,6 +43,37 @@ Start-Command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUN
 	if got.ModuleTags["Start-Command"] == "" {
 		t.Fatalf("missing Start-Command module tag")
 	}
+	if got.Context != "." {
+		t.Fatalf("context = %q, want default .", got.Context)
+	}
+}
+
+func TestLoadBuildProfileWithBuildContexts(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "hermes.toml")
+	if err := os.WriteFile(path, []byte(`name = "hermes"
+runtime_profile = "hermes"
+dockerfile = "Dockerfile.telegramcustomer"
+context = "."
+image_name = "sandytest456/docker-telegramcustomer:latest"
+start_command = "sh -lc 'exec \"$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent/bin/start-vmdocker-agent.sh\"'"
+
+[build_contexts]
+extra_src = "${EXTRA_CONTEXT_PATH}"
+
+[module_tags]
+Start-Command = "sh -lc 'exec \"$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent/bin/start-vmdocker-agent.sh\"'"
+`), 0o644); err != nil {
+		t.Fatalf("write manifest failed: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if got.BuildContexts["extra_src"] != "${EXTRA_CONTEXT_PATH}" {
+		t.Fatalf("extra_src build context = %q", got.BuildContexts["extra_src"])
+	}
 }
 
 func TestLoadRejectsSystemPathStartCommand(t *testing.T) {

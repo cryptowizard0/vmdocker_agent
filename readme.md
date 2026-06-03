@@ -16,7 +16,7 @@ Developer guide for the Claude runtime:
 
 ## 🚀 Features
 
-- **Runtime Modes**: Supports profile-driven `openclaw`, `claude`, `telegramcustomer`, and in-memory `test` runtimes
+- **Runtime Modes**: Supports profile-driven `openclaw`, `claude`, `hermes`/`telegramcustomer`, and in-memory `test` runtimes
 - **Docker Integration**: Containerized deployment for consistency
 - **RESTful API**: `/vmm/health`, `/vmm/spawn`, `/vmm/apply`
 
@@ -26,7 +26,7 @@ The runtime behavior can be customized via environment variables.
 
 ### General
 - `VMDOCKER_AGENT_PROFILE`: Preferred agent profile selector. If unset, `RUNTIME_TYPE` maps to a compatibility profile.
-- `RUNTIME_TYPE`: Compatibility runtime selector (e.g., `openclaw`, `claude`, `telegramcustomer`, `test`).
+- `RUNTIME_TYPE`: Compatibility runtime selector (e.g., `openclaw`, `claude`, `telegramcustomer`, `test`). Hermes uses `VMDOCKER_AGENT_PROFILE=hermes` with `RUNTIME_TYPE=telegramcustomer`.
 - `CLAUDE_CODE_BIN`: Optional Claude CLI path override for custom images or tests.
 - `CLAUDE_CODE_TIMEOUT_MS`: Optional Claude CLI timeout in milliseconds (default: `600000`).
 - `CLAUDE_CODE_FLAGS`: Optional extra Claude CLI flags appended to the default headless invocation. Quote values with spaces.
@@ -253,8 +253,16 @@ go build -o vmdocker-container
 `vmdocker_agent` now owns the module-generation flow for portable VMDocker modules.
 
 ```bash
-go run ./cmd/module
+go run ./cmd/module -profile claude
 ```
+
+Hermes module generation uses the same flow:
+
+```bash
+go run ./cmd/module -profile hermes
+```
+
+Hermes downloads `github.com/xingj404-lab/agent-hub` as a Go module during image build. If that repository is private, provide a GitHub token through `GITHUB_TOKEN` or `GH_TOKEN`; the Dockerfile consumes it as a BuildKit secret and does not bake it into the final image.
 
 The command automatically reads `/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/.env`.
 
@@ -265,28 +273,19 @@ VMDOCKER_URL=http://127.0.0.1:8080
 VMDOCKER_PRIVATE_KEY=
 ```
 
-Then enable one generation mode in the same file:
+Build and image settings now come from `build/profiles/<profile>.toml`. The profile command checks whether the configured image exists locally. If it is missing, it builds the image from the profile Dockerfile before generating the module.
 
-- Pull mode: `VMDOCKER_SANDBOX_IMAGE_NAME`, optional `VMDOCKER_SANDBOX_IMAGE_ID`
-- Local build mode: `VMDOCKER_BUILD_DOCKERFILE`, optional `VMDOCKER_BUILD_CONTEXT_DIR`, optional `VMDOCKER_BUILD_TAG`
-- Remote build mode: `VMDOCKER_BUILD_DOCKERFILE_PATH`, `VMDOCKER_BUILD_CONTEXT_URL`, optional `VMDOCKER_BUILD_TAG`
-- Optional build args: `VMDOCKER_BUILD_ARG_<NAME>=<value>`
+What `go run ./cmd/module -profile claude` does now:
 
-Recommended local Dockerfile values:
+1. Load `build/profiles/claude.toml`
+2. Reuse the configured local image or build it if it is missing
+3. Export that image with `docker save`
+4. Compress the archive with `gzip`
+5. Store the compressed bytes in the generated module bundle `data`
+6. Write a local file `mod/mod-<module-id>.json`
+7. Print the generated module id and local file path
 
-- `VMDOCKER_BUILD_DOCKERFILE=Dockerfile.openclaw`
-- `VMDOCKER_BUILD_DOCKERFILE=Dockerfile.claude`
-
-The repository already includes a ready-to-fill `.env` template with all of these entries commented by mode.
-
-What `go run ./cmd/module` does now:
-
-1. Resolve the final local image using Pull mode or Build mode
-2. Export that image with `docker save`
-3. Compress the archive with `gzip`
-4. Store the compressed bytes in the generated module bundle `data`
-5. Write a local file `mod/mod-<module-id>.json`
-6. Print the generated module id and local file path
+The old env-driven mode remains available by running `go run ./cmd/module` without `-profile`.
 
 The generated module is therefore self-contained for cold starts. If a VMDocker node later does not have the image locally, it can restore it from the module file instead of rebuilding it from a Dockerfile.
 

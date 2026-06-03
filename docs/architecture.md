@@ -97,7 +97,7 @@ RUNTIME_TYPE = "claude"
 
 Profile 主要承担这些职责：
 
-- 选择 backend，例如 `claude`、`openclaw-legacy`、`telegramcustomer-legacy`、`test`。
+- 选择 backend，例如 `claude`、`openclaw-legacy`、`telegramcustomer-legacy`、`test`。Hermes profile 复用 `telegramcustomer-legacy` backend。
 - 声明 workspace、home、context、memory、skills 等路径模板。
 - 声明 role 文件。
 - 声明启用哪些 skills。
@@ -720,6 +720,7 @@ build/profiles/<agent>.toml
 - Claude 已经通过 `runtime/backend/claude` 接入新 backend 接口。
 - OpenClaw 仍使用 legacy runtime，通过 `runtime/backend/legacy` 接入。
 - TelegramCustomer 仍使用 legacy runtime，通过 `runtime/backend/legacy` 接入。
+- Hermes 是新流程入口 profile，内部复用 TelegramCustomer/Hermes runtime package 和 `telegramcustomer-legacy` backend。
 - test runtime 也通过 legacy wrapper 接入。
 - `/vmm/*` 外部 API 语义保持兼容。
 - `RUNTIME_TYPE` 兼容路径仍保留，但新路径推荐使用 `VMDOCKER_AGENT_PROFILE`。

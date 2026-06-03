@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cryptowizard0/vmdocker_agent/buildmanifest"
 	arSchema "github.com/permadao/goar/schema"
 )
 
@@ -40,6 +41,12 @@ type ModuleArtifact struct {
 type localImage struct {
 	Name string
 	ID   string
+}
+
+type moduleOps struct {
+	inspectImageID     func(context.Context, string) (string, error)
+	buildImage         func(context.Context, buildmanifest.Manifest) error
+	exportImageArchive func(context.Context, string) ([]byte, error)
 }
 
 var progressWriter io.Writer = os.Stdout
@@ -72,6 +79,149 @@ func GenerateModuleArtifact() (ModuleArtifact, error) {
 		ModuleBytes: moduleBytes,
 		Tags:        tags,
 	}, nil
+}
+
+func GenerateModuleArtifactFromManifest(manifest buildmanifest.Manifest) (ModuleArtifact, error) {
+	return generateModuleArtifactFromManifest(context.Background(), manifest, defaultModuleOps())
+}
+
+func defaultModuleOps() moduleOps {
+	return moduleOps{
+		inspectImageID:     inspectImageID,
+		buildImage:         buildImageFromManifest,
+		exportImageArchive: exportImageArchive,
+	}
+}
+
+func generateModuleArtifactFromManifest(ctx context.Context, manifest buildmanifest.Manifest, ops moduleOps) (ModuleArtifact, error) {
+	if err := manifest.Validate(); err != nil {
+		return ModuleArtifact{}, err
+	}
+	if ops.inspectImageID == nil {
+		ops.inspectImageID = inspectImageID
+	}
+	if ops.buildImage == nil {
+		ops.buildImage = buildImageFromManifest
+	}
+	if ops.exportImageArchive == nil {
+		ops.exportImageArchive = exportImageArchive
+	}
+
+	logProgressf("start generating module artifact from build profile %s", manifest.Name)
+	imageID, err := ops.inspectImageID(ctx, manifest.ImageName)
+	if err != nil {
+		logProgressf("local image missing, building %s from %s", manifest.ImageName, manifest.Dockerfile)
+		if err := ops.buildImage(ctx, manifest); err != nil {
+			return ModuleArtifact{}, err
+		}
+		imageID, err = ops.inspectImageID(ctx, manifest.ImageName)
+		if err != nil {
+			return ModuleArtifact{}, err
+		}
+	}
+	image := localImage{Name: manifest.ImageName, ID: imageID}
+	logProgressf("final image ready: name=%s id=%s", image.Name, image.ID)
+
+	logProgressf("exporting docker image archive from %s", image.Name)
+	moduleBytes, err := ops.exportImageArchive(ctx, image.Name)
+	if err != nil {
+		return ModuleArtifact{}, err
+	}
+	logProgressf("image archive ready: compressed_size=%s", formatBytes(int64(len(moduleBytes))))
+
+	return ModuleArtifact{
+		ModuleBytes: moduleBytes,
+		Tags:        manifestModuleTags(manifest, image),
+	}, nil
+}
+
+func buildImageFromManifest(ctx context.Context, manifest buildmanifest.Manifest) error {
+	content, err := os.ReadFile(manifest.Dockerfile)
+	if err != nil {
+		return fmt.Errorf("read Dockerfile %s failed: %w", manifest.Dockerfile, err)
+	}
+	contextRef := strings.TrimSpace(manifest.Context)
+	if contextRef == "" {
+		contextRef = "."
+	}
+	absContext, err := filepath.Abs(contextRef)
+	if err != nil {
+		return fmt.Errorf("resolve build context path %s: %w", contextRef, err)
+	}
+	buildContexts, err := resolveBuildContexts(manifest)
+	if err != nil {
+		return err
+	}
+	return dockerBuild(ctx, string(content), absContext, manifest.ImageName, nil, buildContexts)
+}
+
+func resolveBuildContexts(manifest buildmanifest.Manifest) (map[string]string, error) {
+	if len(manifest.BuildContexts) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(manifest.BuildContexts))
+	for name, rawPath := range manifest.BuildContexts {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, fmt.Errorf("build context name is required")
+		}
+		expandedPath, err := expandBuildContextPath(rawPath)
+		if err != nil {
+			return nil, fmt.Errorf("build context %s: %w", name, err)
+		}
+		absPath, err := filepath.Abs(expandedPath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve build context %s path %s: %w", name, expandedPath, err)
+		}
+		out[name] = absPath
+	}
+	return out, nil
+}
+
+func expandBuildContextPath(rawPath string) (string, error) {
+	rawPath = strings.TrimSpace(rawPath)
+	if rawPath == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	missing := make([]string, 0)
+	expanded := os.Expand(rawPath, func(name string) string {
+		value := os.Getenv(name)
+		if value == "" {
+			missing = append(missing, name)
+		}
+		return value
+	})
+	if len(missing) != 0 {
+		return "", fmt.Errorf("environment variable %s is required", strings.Join(missing, ", "))
+	}
+	expanded = strings.TrimSpace(expanded)
+	if expanded == "" {
+		return "", fmt.Errorf("path is empty after expansion")
+	}
+	return expanded, nil
+}
+
+func manifestModuleTags(manifest buildmanifest.Manifest, image localImage) []arSchema.Tag {
+	values := make(map[string]string, len(manifest.ModuleTags)+4)
+	for key, value := range manifest.ModuleTags {
+		values[key] = value
+	}
+	values["Image-Name"] = image.Name
+	values["Image-ID"] = image.ID
+	values[ImageSourceTag] = ImageSourceModuleData
+	values[ImageArchiveTag] = ImageArchiveDockerSaveGzip
+
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	tags := make([]arSchema.Tag, 0, len(names))
+	for _, name := range names {
+		tags = append(tags, arSchema.Tag{Name: name, Value: values[name]})
+	}
+	return tags
 }
 
 func baseModuleTags() []arSchema.Tag {
@@ -112,7 +262,7 @@ func buildModeImage(ctx context.Context) (localImage, error) {
 	buildArgs := BuildArgsFromEnvMap()
 	buildTag := GetEnvWith("VMDOCKER_BUILD_TAG", defaultBuildTag(string(content), contextRef, buildArgs))
 	logProgressf("build image: tag=%s context=%s build_args=%d", buildTag, contextRef, len(buildArgs))
-	if err := dockerBuild(ctx, string(content), contextRef, buildTag, buildArgs); err != nil {
+	if err := dockerBuild(ctx, string(content), contextRef, buildTag, buildArgs, nil); err != nil {
 		return localImage{}, err
 	}
 
@@ -294,7 +444,7 @@ func sortedBuildArgs(args map[string]string) []string {
 	return buildArgs
 }
 
-func dockerBuild(ctx context.Context, dockerfile, contextRef, tag string, buildArgs map[string]string) error {
+func dockerBuild(ctx context.Context, dockerfile, contextRef, tag string, buildArgs map[string]string, buildContexts map[string]string) error {
 	cliBin, err := dockerBinary()
 	if err != nil {
 		return err
@@ -311,9 +461,36 @@ func dockerBuild(ctx context.Context, dockerfile, contextRef, tag string, buildA
 		return err
 	}
 
+	args := dockerBuildArgs(dockerfilePath, tag, buildArgs, buildContexts, contextRef)
+	cmd := exec.CommandContext(ctx, cliBin, args...)
+	if extraEnv := dockerBuildSecretEnv(); len(extraEnv) != 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
+	cmd.Stdout = progressWriter
+	cmd.Stderr = progressWriter
+	logProgressf("docker build started: tag=%s", tag)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker build failed for %s: %w", tag, err)
+	}
+	logProgressf("docker build completed: tag=%s", tag)
+	return nil
+}
+
+func dockerBuildArgs(dockerfilePath, tag string, buildArgs map[string]string, buildContexts map[string]string, contextRef string) []string {
 	args := []string{"build", "--progress=plain", "-f", dockerfilePath, "-t", tag}
 	for _, buildArg := range sortedBuildArgs(buildArgs) {
 		args = append(args, "--build-arg", buildArg)
+	}
+	if secretArg := githubTokenSecretArg(); secretArg != "" {
+		args = append(args, "--secret", secretArg)
+	}
+	buildContextNames := make([]string, 0, len(buildContexts))
+	for name := range buildContexts {
+		buildContextNames = append(buildContextNames, name)
+	}
+	sort.Strings(buildContextNames)
+	for _, name := range buildContextNames {
+		args = append(args, "--build-context", name+"="+buildContexts[name])
 	}
 	for _, proxyKey := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"} {
 		if val := os.Getenv(proxyKey); val != "" {
@@ -323,15 +500,23 @@ func dockerBuild(ctx context.Context, dockerfile, contextRef, tag string, buildA
 		}
 	}
 	args = append(args, contextRef)
+	return args
+}
 
-	cmd := exec.CommandContext(ctx, cliBin, args...)
-	cmd.Stdout = progressWriter
-	cmd.Stderr = progressWriter
-	logProgressf("docker build started: tag=%s", tag)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker build failed for %s: %w", tag, err)
+func githubTokenSecretArg() string {
+	if os.Getenv("GITHUB_TOKEN") != "" || os.Getenv("GH_TOKEN") != "" {
+		return "id=github_token,env=GITHUB_TOKEN"
 	}
-	logProgressf("docker build completed: tag=%s", tag)
+	return ""
+}
+
+func dockerBuildSecretEnv() []string {
+	if os.Getenv("GITHUB_TOKEN") != "" {
+		return nil
+	}
+	if token := os.Getenv("GH_TOKEN"); token != "" {
+		return []string{"GITHUB_TOKEN=" + token}
+	}
 	return nil
 }
 

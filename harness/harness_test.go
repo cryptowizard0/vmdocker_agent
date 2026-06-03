@@ -247,6 +247,50 @@ func TestInitRejectsTraversalSkillName(t *testing.T) {
 	}
 }
 
+func TestInitHermesProfile(t *testing.T) {
+	runtimeWorkspace := t.TempDir()
+	assetRoot := filepath.Join(runtimeWorkspace, ".vmdocker-agent")
+	skillDir := filepath.Join(assetRoot, "skills", "hymx-runtime")
+	rolePath := filepath.Join(assetRoot, "roles", "hermes.md")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: hymx-runtime\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(rolePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rolePath, []byte("# Hermes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prof, err := profile.Load("profiles", "hermes")
+	if err != nil {
+		t.Fatalf("Load hermes profile failed: %v", err)
+	}
+	ctx, err := Init(prof, mapLookup(map[string]string{
+		"VMDOCKER_RUNTIME_WORKSPACE": runtimeWorkspace,
+		"VMDOCKER_AGENT_WORKSPACE":   filepath.Join(runtimeWorkspace, "workspace"),
+		"VMDOCKER_RUNTIME_HOME":      filepath.Join(runtimeWorkspace, ".home"),
+	}))
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	if ctx.ProfileName != "hermes" {
+		t.Fatalf("profile = %q, want hermes", ctx.ProfileName)
+	}
+	if ctx.Backend != "telegramcustomer-legacy" {
+		t.Fatalf("backend = %q, want telegramcustomer-legacy", ctx.Backend)
+	}
+	if ctx.RolePath != rolePath {
+		t.Fatalf("role path = %q, want %q", ctx.RolePath, rolePath)
+	}
+	if len(ctx.SkillPaths) != 1 || ctx.SkillPaths[0] != skillDir {
+		t.Fatalf("skill paths = %#v, want [%q]", ctx.SkillPaths, skillDir)
+	}
+}
+
 func mapLookup(values map[string]string) EnvLookup {
 	return func(name string) string {
 		return values[name]

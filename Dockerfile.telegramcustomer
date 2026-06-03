@@ -2,13 +2,27 @@
 FROM golang:1.25 AS builder
 
 WORKDIR /app
+ARG GOPRIVATE=github.com/xingj404-lab/agent-hub
+ENV GOPRIVATE=${GOPRIVATE}
 COPY go.mod go.sum ./
-COPY --from=agent_hub / /tmp/agent-hub
-RUN go mod edit -replace github.com/xingj404-lab/agent-hub=/tmp/agent-hub
-RUN go mod download
+RUN --mount=type=secret,id=github_token,required=false \
+    set -eu; \
+    token_file=/run/secrets/github_token; \
+    cleanup() { \
+        if [ -n "${token:-}" ]; then \
+            git config --global --unset-all url."https://x-access-token:${token}@github.com/".insteadOf || true; \
+        fi; \
+    }; \
+    trap cleanup EXIT; \
+    if [ -s "${token_file}" ]; then \
+        token="$(cat "${token_file}")"; \
+        git config --global url."https://x-access-token:${token}@github.com/".insteadOf "https://github.com/"; \
+    else \
+        echo "[hermes-build][warn] github_token secret not provided; private agent-hub module download may fail" >&2; \
+    fi; \
+    go mod download
 
 COPY . .
-RUN go mod edit -replace github.com/xingj404-lab/agent-hub=/tmp/agent-hub
 RUN CGO_ENABLED=0 go build -o /app/main .
 
 FROM sandytest456/hermes-agent:latest
@@ -19,6 +33,17 @@ WORKDIR /app
 COPY --from=builder /app/main /app/main
 COPY start-vmdocker-agent.sh /usr/local/bin/start-vmdocker-agent.sh
 COPY bootstrap/telegramcustomer.sh /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh
+RUN mkdir -p \
+    /opt/vmdocker-agent-bundle/bin \
+    /opt/vmdocker-agent-bundle/bootstrap \
+    /opt/vmdocker-agent-bundle/profiles \
+    /opt/vmdocker-agent-bundle/roles \
+    /opt/vmdocker-agent-bundle/skills
+COPY start-vmdocker-agent.sh /opt/vmdocker-agent-bundle/bin/start-vmdocker-agent.sh
+COPY bootstrap/telegramcustomer.sh /opt/vmdocker-agent-bundle/bootstrap/telegramcustomer.sh
+COPY harness/profiles/hermes /opt/vmdocker-agent-bundle/profiles/hermes
+COPY harness/roles/hermes.md /opt/vmdocker-agent-bundle/roles/hermes.md
+COPY harness/skills/ /opt/vmdocker-agent-bundle/skills/
 
 RUN set -eux; \
     if command -v apt-get >/dev/null 2>&1; then \
@@ -33,13 +58,19 @@ RUN set -eux; \
     fi
 
 RUN set -eux; \
-    chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh
+    chmod +x \
+        /usr/local/bin/start-vmdocker-agent.sh \
+        /app/main \
+        /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh \
+        /opt/vmdocker-agent-bundle/bin/start-vmdocker-agent.sh \
+        /opt/vmdocker-agent-bundle/bootstrap/telegramcustomer.sh
 
 RUN set -eux; \
     test -x /usr/local/bin/hermes; \
     test -x /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh
 
 ENV VMDOCKER_AGENT_APP_ROOT=/app
+ENV VMDOCKER_AGENT_PROFILE=hermes
 ENV RUNTIME_TYPE=telegramcustomer
 WORKDIR /workspace
 
