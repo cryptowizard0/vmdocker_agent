@@ -14,7 +14,19 @@ WORKDIR /app
 
 COPY --from=builder /app/main /app/main
 COPY start-vmdocker-agent.sh /usr/local/bin/start-vmdocker-agent.sh
+COPY start-vmdocker-agent-workspace.sh /usr/local/bin/start-vmdocker-agent-workspace.sh
 COPY bootstrap/claude.sh /usr/local/lib/vmdocker-agent/bootstrap/claude.sh
+RUN mkdir -p \
+    /opt/vmdocker-agent-bundle/bin \
+    /opt/vmdocker-agent-bundle/bootstrap \
+    /opt/vmdocker-agent-bundle/profiles \
+    /opt/vmdocker-agent-bundle/roles \
+    /opt/vmdocker-agent-bundle/skills
+COPY start-vmdocker-agent.sh /opt/vmdocker-agent-bundle/bin/start-vmdocker-agent.sh
+COPY bootstrap/claude.sh /opt/vmdocker-agent-bundle/bootstrap/claude.sh
+COPY harness/profiles/claude /opt/vmdocker-agent-bundle/profiles/claude
+COPY harness/roles/claude.md /opt/vmdocker-agent-bundle/roles/claude.md
+COPY harness/skills/hymx-runtime /opt/vmdocker-agent-bundle/skills/hymx-runtime
 
 RUN set -eux; \
     if command -v apt-get >/dev/null 2>&1; then \
@@ -35,7 +47,8 @@ RUN set -eux; \
     rm -f /etc/sudoers.d/agent
 
 RUN set -eux; \
-    chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /usr/local/lib/vmdocker-agent/bootstrap/claude.sh; \
+    chmod +x /usr/local/bin/start-vmdocker-agent.sh /usr/local/bin/start-vmdocker-agent-workspace.sh /app/main /usr/local/lib/vmdocker-agent/bootstrap/claude.sh; \
+    chmod +x /opt/vmdocker-agent-bundle/bin/start-vmdocker-agent.sh /opt/vmdocker-agent-bundle/bootstrap/claude.sh; \
     rm -rf /home/agent/workspace; \
     chown -R agent:agent /app /usr/local/bin/start-vmdocker-agent.sh /usr/local/lib/vmdocker-agent
 

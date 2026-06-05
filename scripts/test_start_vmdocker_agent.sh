@@ -3,9 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENTRYPOINT="${ROOT_DIR}/start-vmdocker-agent.sh"
+WORKSPACE_ENTRYPOINT="${ROOT_DIR}/start-vmdocker-agent-workspace.sh"
 TMPDIR_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vmdocker-entrypoint.XXXXXX")"
 APP_DIR="${TMPDIR_ROOT}/app"
-HOOKS_DIR="${TMPDIR_ROOT}/hooks"
+HOOKS_DIR="${TMPDIR_ROOT}/bootstrap"
 TRACE_FILE="${TMPDIR_ROOT}/trace.log"
 
 cleanup() {
@@ -102,6 +103,16 @@ run_entrypoint_with_bundle() {
   sh "${ENTRYPOINT}"
 }
 
+run_workspace_entrypoint_with_bundle() {
+  local asset_root="$1"
+  local bundle_root="$2"
+  TRACE_FILE="${TRACE_FILE}" \
+  VMDOCKER_RUNTIME_WORKSPACE="${TMPDIR_ROOT}/runtime" \
+  VMDOCKER_AGENT_ASSET_ROOT="${asset_root}" \
+  VMDOCKER_AGENT_BUNDLE_ROOT="${bundle_root}" \
+  sh "${WORKSPACE_ENTRYPOINT}"
+}
+
 : > "${TRACE_FILE}"
 run_entrypoint openclaw
 assert_contains "${TRACE_FILE}" "hook:openclaw"
@@ -165,6 +176,21 @@ chmod +x "${BUNDLE_ROOT}/bootstrap/claude.sh"
 run_entrypoint_with_bundle claude "${ASSET_ROOT}" "${BUNDLE_ROOT}"
 assert_contains "${TRACE_FILE}" "hook:claude"
 assert_not_contains "${TRACE_FILE}" "hook:bundle-claude"
+
+WRAPPER_BUNDLE_ROOT="${TMPDIR_ROOT}/wrapper-bundle"
+WRAPPER_ASSET_ROOT="${TMPDIR_ROOT}/wrapper-runtime/.vmdocker-agent"
+mkdir -p "${WRAPPER_BUNDLE_ROOT}/bin"
+cat > "${WRAPPER_BUNDLE_ROOT}/bin/start-vmdocker-agent.sh" <<'EOF'
+#!/bin/sh
+set -eu
+printf 'wrapper:workspace-entrypoint\n' >> "${TRACE_FILE}"
+EOF
+chmod +x "${WRAPPER_BUNDLE_ROOT}/bin/start-vmdocker-agent.sh"
+
+: > "${TRACE_FILE}"
+run_workspace_entrypoint_with_bundle "${WRAPPER_ASSET_ROOT}" "${WRAPPER_BUNDLE_ROOT}"
+assert_contains "${TRACE_FILE}" "wrapper:workspace-entrypoint"
+test -x "${WRAPPER_ASSET_ROOT}/bin/start-vmdocker-agent.sh"
 
 if VMDOCKER_AGENT_APP_ROOT="${APP_DIR}" VMDOCKER_AGENT_BOOTSTRAP_DIR="${HOOKS_DIR}" RUNTIME_TYPE="unknown" sh "${ENTRYPOINT}" >"${TMPDIR_ROOT}/unknown.out" 2>"${TMPDIR_ROOT}/unknown.err"; then
   echo "[ERROR] expected unknown runtime to fail"
