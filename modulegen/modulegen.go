@@ -25,12 +25,14 @@ import (
 const (
 	DefaultSandboxAgent        = "shell"
 	DefaultOpenclawVersion     = "2026.3.1-beta.1"
-	DefaultStartCommand        = `sh -lc 'asset_root="${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}"; bundle_root="${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}"; if [ ! -x "$asset_root/bin/start-vmdocker-agent.sh" ] && [ -d "$bundle_root" ]; then mkdir -p "$asset_root"; cp -R "$bundle_root/." "$asset_root/"; chmod +x "$asset_root/bin/start-vmdocker-agent.sh"; fi; exec "$asset_root/bin/start-vmdocker-agent.sh"'`
+	DefaultStartCommand        = buildmanifest.DefaultStartCommand
 	ModuleFormat               = "hymx.vmdocker.v0.0.1"
 	ImageSourceTag             = "Image-Source"
 	ImageArchiveTag            = "Image-Archive-Format"
 	ImageSourceModuleData      = "module-data"
 	ImageArchiveDockerSaveGzip = "docker-save+gzip"
+	ContainerEnvTagPrefix      = "Container-Env-"
+	envAgentProfile            = "VMDOCKER_AGENT_PROFILE"
 )
 
 type ModuleArtifact struct {
@@ -50,6 +52,7 @@ type moduleOps struct {
 }
 
 var progressWriter io.Writer = os.Stdout
+var githubAuthToken = readGithubAuthToken
 
 func GenerateModuleArtifact() (ModuleArtifact, error) {
 	base := baseModuleTags()
@@ -202,10 +205,26 @@ func expandBuildContextPath(rawPath string) (string, error) {
 }
 
 func manifestModuleTags(manifest buildmanifest.Manifest, image localImage) []arSchema.Tag {
-	values := make(map[string]string, len(manifest.ModuleTags)+4)
+	values := make(map[string]string, len(manifest.ModuleTags)+len(manifest.Env)+5)
 	for key, value := range manifest.ModuleTags {
 		values[key] = value
 	}
+	if strings.TrimSpace(values["Sandbox-Agent"]) == "" {
+		values["Sandbox-Agent"] = DefaultSandboxAgent
+	}
+	values["Start-Command"] = manifest.StartCommand
+	for key, value := range manifest.Env {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		values[ContainerEnvTagPrefix+key] = value
+	}
+	profileName, err := manifest.RuntimeProfileName()
+	if err != nil {
+		profileName = manifest.RuntimeProfile
+	}
+	values[ContainerEnvTagPrefix+envAgentProfile] = profileName
 	values["Image-Name"] = image.Name
 	values["Image-ID"] = image.ID
 	values[ImageSourceTag] = ImageSourceModuleData
@@ -461,10 +480,11 @@ func dockerBuild(ctx context.Context, dockerfile, contextRef, tag string, buildA
 		return err
 	}
 
-	args := dockerBuildArgs(dockerfilePath, tag, buildArgs, buildContexts, contextRef)
+	secretEnv := dockerBuildSecretEnv()
+	args := dockerBuildArgs(dockerfilePath, tag, buildArgs, buildContexts, contextRef, hasGithubTokenSecret(secretEnv))
 	cmd := exec.CommandContext(ctx, cliBin, args...)
-	if extraEnv := dockerBuildSecretEnv(); len(extraEnv) != 0 {
-		cmd.Env = append(os.Environ(), extraEnv...)
+	if len(secretEnv) != 0 {
+		cmd.Env = append(os.Environ(), secretEnv...)
 	}
 	cmd.Stdout = progressWriter
 	cmd.Stderr = progressWriter
@@ -476,13 +496,13 @@ func dockerBuild(ctx context.Context, dockerfile, contextRef, tag string, buildA
 	return nil
 }
 
-func dockerBuildArgs(dockerfilePath, tag string, buildArgs map[string]string, buildContexts map[string]string, contextRef string) []string {
+func dockerBuildArgs(dockerfilePath, tag string, buildArgs map[string]string, buildContexts map[string]string, contextRef string, includeGithubTokenSecret bool) []string {
 	args := []string{"build", "--progress=plain", "-f", dockerfilePath, "-t", tag}
 	for _, buildArg := range sortedBuildArgs(buildArgs) {
 		args = append(args, "--build-arg", buildArg)
 	}
-	if secretArg := githubTokenSecretArg(); secretArg != "" {
-		args = append(args, "--secret", secretArg)
+	if includeGithubTokenSecret {
+		args = append(args, "--secret", "id=github_token,env=GITHUB_TOKEN")
 	}
 	buildContextNames := make([]string, 0, len(buildContexts))
 	for name := range buildContexts {
@@ -503,21 +523,40 @@ func dockerBuildArgs(dockerfilePath, tag string, buildArgs map[string]string, bu
 	return args
 }
 
-func githubTokenSecretArg() string {
-	if os.Getenv("GITHUB_TOKEN") != "" || os.Getenv("GH_TOKEN") != "" {
-		return "id=github_token,env=GITHUB_TOKEN"
-	}
-	return ""
-}
-
 func dockerBuildSecretEnv() []string {
 	if os.Getenv("GITHUB_TOKEN") != "" {
 		return nil
 	}
-	if token := os.Getenv("GH_TOKEN"); token != "" {
+	if token := strings.TrimSpace(os.Getenv("GH_TOKEN")); token != "" {
 		return []string{"GITHUB_TOKEN=" + token}
 	}
+	token, err := githubAuthToken()
+	if err == nil && strings.TrimSpace(token) != "" {
+		return []string{"GITHUB_TOKEN=" + strings.TrimSpace(token)}
+	}
 	return nil
+}
+
+func hasGithubTokenSecret(extraEnv []string) bool {
+	if strings.TrimSpace(os.Getenv("GITHUB_TOKEN")) != "" {
+		return true
+	}
+	for _, env := range extraEnv {
+		value, ok := strings.CutPrefix(env, "GITHUB_TOKEN=")
+		if ok && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func readGithubAuthToken() (string, error) {
+	cmd := exec.Command("gh", "auth", "token")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func dockerPull(ctx context.Context, imageName string) error {

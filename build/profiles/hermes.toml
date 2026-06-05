@@ -1,20 +1,10 @@
 name = "hermes"
-runtime_profile = "hermes"
+runtime_profile = "harness/profiles/hermes/profile.toml"
 dockerfile = "Dockerfile.telegramcustomer"
-context = "."
 image_name = "sandytest456/docker-telegramcustomer:latest"
-start_command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}\"; bundle_root=\"${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}\"; if [ ! -x \"$asset_root/bin/start-vmdocker-agent.sh\" ] && [ -d \"$bundle_root\" ]; then mkdir -p \"$asset_root\"; cp -R \"$bundle_root/.\" \"$asset_root/\"; chmod +x \"$asset_root/bin/start-vmdocker-agent.sh\"; fi; exec \"$asset_root/bin/start-vmdocker-agent.sh\"'"
 
 [assets]
-profiles = ["hermes"]
-skills = ["hymx-runtime"]
-roles = ["hermes"]
 bootstrap = ["telegramcustomer.sh"]
 
 [env]
-VMDOCKER_AGENT_PROFILE = "hermes"
 RUNTIME_TYPE = "telegramcustomer"
-
-[module_tags]
-Sandbox-Agent = "shell"
-Start-Command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}\"; bundle_root=\"${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}\"; if [ ! -x \"$asset_root/bin/start-vmdocker-agent.sh\" ] && [ -d \"$bundle_root\" ]; then mkdir -p \"$asset_root\"; cp -R \"$bundle_root/.\" \"$asset_root/\"; chmod +x \"$asset_root/bin/start-vmdocker-agent.sh\"; fi; exec \"$asset_root/bin/start-vmdocker-agent.sh\"'"

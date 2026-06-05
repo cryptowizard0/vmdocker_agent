@@ -81,11 +81,7 @@ func TestGenerateModuleArtifactBaseTagsDoNotIncludeRuntimeBackend(t *testing.T) 
 
 func TestDefaultStartCommandUsesWorkspaceAssetRoot(t *testing.T) {
 	required := []string{
-		"VMDOCKER_RUNTIME_WORKSPACE",
-		"VMDOCKER_AGENT_ASSET_ROOT",
-		"VMDOCKER_AGENT_BUNDLE_ROOT",
-		".vmdocker-agent",
-		"bin/start-vmdocker-agent.sh",
+		"/usr/local/bin/start-vmdocker-agent-workspace.sh",
 	}
 	for _, fragment := range required {
 		if !strings.Contains(DefaultStartCommand, fragment) {
@@ -100,11 +96,10 @@ func TestDefaultStartCommandUsesWorkspaceAssetRoot(t *testing.T) {
 func TestManifestModuleTagsAreUsedAndImageTagsAreAdded(t *testing.T) {
 	manifest := buildmanifest.Manifest{
 		Name:           "claude",
-		RuntimeProfile: "claude",
+		RuntimeProfile: "harness/profiles/claude/profile.toml",
 		Dockerfile:     "Dockerfile.claude",
 		ImageName:      "example/claude:latest",
-		ModuleTags:     map[string]string{"Start-Command": "workspace-start VMDOCKER_RUNTIME_WORKSPACE", "Sandbox-Agent": "shell"},
-		StartCommand:   "workspace-start VMDOCKER_RUNTIME_WORKSPACE",
+		Env:            map[string]string{"RUNTIME_TYPE": "claude"},
 	}
 	ops := moduleOps{
 		inspectImageID: func(context.Context, string) (string, error) {
@@ -124,8 +119,11 @@ func TestManifestModuleTagsAreUsedAndImageTagsAreAdded(t *testing.T) {
 		t.Fatalf("generateModuleArtifactFromManifest failed: %v", err)
 	}
 	tags := tagsToMap(artifact.Tags)
-	if tags["Start-Command"] != "workspace-start VMDOCKER_RUNTIME_WORKSPACE" {
+	if tags["Start-Command"] != DefaultStartCommand {
 		t.Fatalf("Start-Command tag = %q", tags["Start-Command"])
+	}
+	if tags["Sandbox-Agent"] != DefaultSandboxAgent {
+		t.Fatalf("Sandbox-Agent tag = %q", tags["Sandbox-Agent"])
 	}
 	if tags["Image-Name"] != "example/claude:latest" {
 		t.Fatalf("Image-Name tag = %q", tags["Image-Name"])
@@ -139,18 +137,21 @@ func TestManifestModuleTagsAreUsedAndImageTagsAreAdded(t *testing.T) {
 	if tags[ImageArchiveTag] != ImageArchiveDockerSaveGzip {
 		t.Fatalf("Image-Archive-Format tag = %q", tags[ImageArchiveTag])
 	}
+	if tags[ContainerEnvTagPrefix+"VMDOCKER_AGENT_PROFILE"] != "claude" {
+		t.Fatalf("derived VMDOCKER_AGENT_PROFILE tag = %q", tags[ContainerEnvTagPrefix+"VMDOCKER_AGENT_PROFILE"])
+	}
+	if tags[ContainerEnvTagPrefix+"RUNTIME_TYPE"] != "claude" {
+		t.Fatalf("RUNTIME_TYPE env tag = %q", tags[ContainerEnvTagPrefix+"RUNTIME_TYPE"])
+	}
 }
 
 func TestManifestGenerationBuildsWhenImageIsMissing(t *testing.T) {
 	buildCalled := false
 	manifest := buildmanifest.Manifest{
 		Name:           "claude",
-		RuntimeProfile: "claude",
+		RuntimeProfile: "harness/profiles/claude/profile.toml",
 		ImageName:      "example/claude:latest",
 		Dockerfile:     "Dockerfile.claude",
-		Context:        ".",
-		ModuleTags:     map[string]string{"Start-Command": "workspace-start VMDOCKER_RUNTIME_WORKSPACE"},
-		StartCommand:   "workspace-start VMDOCKER_RUNTIME_WORKSPACE",
 	}
 	ops := moduleOps{
 		inspectImageID: func(context.Context, string) (string, error) {
@@ -211,7 +212,7 @@ func TestResolveBuildContextsRejectsMissingEnv(t *testing.T) {
 func TestDockerBuildArgsIncludeNamedBuildContexts(t *testing.T) {
 	args := dockerBuildArgs("/tmp/Dockerfile", "example/hermes:latest", nil, map[string]string{
 		"extra_src": "/tmp/extra-src",
-	}, ".")
+	}, ".", false)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--build-context extra_src=/tmp/extra-src") {
 		t.Fatalf("expected build context arg, got %v", args)
@@ -219,13 +220,18 @@ func TestDockerBuildArgsIncludeNamedBuildContexts(t *testing.T) {
 }
 
 func TestDockerBuildArgsIncludeGithubTokenSecret(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "secret")
-	t.Setenv("GH_TOKEN", "")
-
-	args := dockerBuildArgs("/tmp/Dockerfile", "example/hermes:latest", nil, nil, ".")
+	args := dockerBuildArgs("/tmp/Dockerfile", "example/hermes:latest", nil, nil, ".", true)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--secret id=github_token,env=GITHUB_TOKEN") {
 		t.Fatalf("expected github token secret arg, got %v", args)
+	}
+}
+
+func TestDockerBuildArgsOmitGithubTokenSecret(t *testing.T) {
+	args := dockerBuildArgs("/tmp/Dockerfile", "example/hermes:latest", nil, nil, ".", false)
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--secret id=github_token,env=GITHUB_TOKEN") {
+		t.Fatalf("did not expect github token secret arg, got %v", args)
 	}
 }
 
@@ -236,6 +242,34 @@ func TestDockerBuildSecretEnvUsesGhTokenFallback(t *testing.T) {
 	got := dockerBuildSecretEnv()
 	if len(got) != 1 || got[0] != "GITHUB_TOKEN=secret" {
 		t.Fatalf("dockerBuildSecretEnv = %v", got)
+	}
+}
+
+func TestDockerBuildSecretEnvUsesGithubCLI(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	oldGithubAuthToken := githubAuthToken
+	githubAuthToken = func() (string, error) {
+		return "cli-secret\n", nil
+	}
+	defer func() {
+		githubAuthToken = oldGithubAuthToken
+	}()
+
+	got := dockerBuildSecretEnv()
+	if len(got) != 1 || got[0] != "GITHUB_TOKEN=cli-secret" {
+		t.Fatalf("dockerBuildSecretEnv = %v", got)
+	}
+}
+
+func TestHasGithubTokenSecretUsesExtraEnv(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+
+	if !hasGithubTokenSecret([]string{"GITHUB_TOKEN=secret"}) {
+		t.Fatalf("expected extra env to enable github token secret")
+	}
+	if hasGithubTokenSecret([]string{"GITHUB_TOKEN="}) {
+		t.Fatalf("empty extra env should not enable github token secret")
 	}
 }
 

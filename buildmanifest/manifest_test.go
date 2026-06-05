@@ -11,24 +11,15 @@ func TestLoadBuildProfile(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "claude.toml")
 	if err := os.WriteFile(path, []byte(`name = "claude"
-runtime_profile = "claude"
+runtime_profile = "harness/profiles/claude/profile.toml"
 dockerfile = "build/docker/Dockerfile.claude"
 image_name = "chriswebber/docker-claude"
-start_command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}\"; bundle_root=\"${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}\"; if [ ! -x \"$asset_root/bin/start-vmdocker-agent.sh\" ] && [ -d \"$bundle_root\" ]; then mkdir -p \"$asset_root\"; cp -R \"$bundle_root/.\" \"$asset_root/\"; chmod +x \"$asset_root/bin/start-vmdocker-agent.sh\"; fi; exec \"$asset_root/bin/start-vmdocker-agent.sh\"'"
 
 [assets]
-profiles = ["claude"]
-skills = ["hymx-runtime"]
-roles = ["claude"]
 bootstrap = ["claude.sh"]
 
 [env]
-VMDOCKER_AGENT_PROFILE = "claude"
 RUNTIME_TYPE = "claude"
-
-[module_tags]
-Sandbox-Agent = "shell"
-Start-Command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}\"; bundle_root=\"${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}\"; if [ ! -x \"$asset_root/bin/start-vmdocker-agent.sh\" ] && [ -d \"$bundle_root\" ]; then mkdir -p \"$asset_root\"; cp -R \"$bundle_root/.\" \"$asset_root/\"; chmod +x \"$asset_root/bin/start-vmdocker-agent.sh\"; fi; exec \"$asset_root/bin/start-vmdocker-agent.sh\"'"
 `), 0o644); err != nil {
 		t.Fatalf("write manifest failed: %v", err)
 	}
@@ -40,11 +31,21 @@ Start-Command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUN
 	if got.Name != "claude" {
 		t.Fatalf("name = %q", got.Name)
 	}
-	if got.ModuleTags["Start-Command"] == "" {
-		t.Fatalf("missing Start-Command module tag")
+	if got.ModuleTags["Start-Command"] != "" {
+		t.Fatalf("unexpected Start-Command module tag")
 	}
 	if got.Context != "." {
 		t.Fatalf("context = %q, want default .", got.Context)
+	}
+	if got.StartCommand != DefaultStartCommand {
+		t.Fatalf("start_command = %q, want default %q", got.StartCommand, DefaultStartCommand)
+	}
+	profileName, err := got.RuntimeProfileName()
+	if err != nil {
+		t.Fatalf("RuntimeProfileName failed: %v", err)
+	}
+	if profileName != "claude" {
+		t.Fatalf("runtime profile name = %q", profileName)
 	}
 }
 
@@ -52,17 +53,12 @@ func TestLoadBuildProfileWithBuildContexts(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "hermes.toml")
 	if err := os.WriteFile(path, []byte(`name = "hermes"
-runtime_profile = "hermes"
+runtime_profile = "harness/profiles/hermes/profile.toml"
 dockerfile = "Dockerfile.telegramcustomer"
-context = "."
 image_name = "sandytest456/docker-telegramcustomer:latest"
-start_command = "sh -lc 'exec \"$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent/bin/start-vmdocker-agent.sh\"'"
 
 [build_contexts]
 extra_src = "${EXTRA_CONTEXT_PATH}"
-
-[module_tags]
-Start-Command = "sh -lc 'exec \"$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent/bin/start-vmdocker-agent.sh\"'"
 `), 0o644); err != nil {
 		t.Fatalf("write manifest failed: %v", err)
 	}
@@ -80,7 +76,7 @@ func TestLoadRejectsSystemPathStartCommand(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "bad.toml")
 	if err := os.WriteFile(path, []byte(`name = "bad"
-runtime_profile = "bad"
+runtime_profile = "harness/profiles/bad/profile.toml"
 dockerfile = "Dockerfile"
 image_name = "example/bad"
 start_command = "/usr/local/bin/start-vmdocker-agent.sh"
@@ -91,5 +87,62 @@ start_command = "/usr/local/bin/start-vmdocker-agent.sh"
 	_, err := Load(path)
 	if err == nil || !strings.Contains(err.Error(), "VMDOCKER_RUNTIME_WORKSPACE") {
 		t.Fatalf("expected workspace start command error, got %v", err)
+	}
+}
+
+func TestLoadRejectsPlainRuntimeProfileName(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "bad.toml")
+	if err := os.WriteFile(path, []byte(`name = "bad"
+runtime_profile = "bad"
+dockerfile = "Dockerfile"
+image_name = "example/bad"
+`), 0o644); err != nil {
+		t.Fatalf("write manifest failed: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "runtime_profile must be a relative profile.toml path") {
+		t.Fatalf("expected runtime_profile path error, got %v", err)
+	}
+}
+
+func TestLoadRejectsModuleStartCommand(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "bad.toml")
+	if err := os.WriteFile(path, []byte(`name = "bad"
+runtime_profile = "harness/profiles/bad/profile.toml"
+dockerfile = "Dockerfile"
+image_name = "example/bad"
+
+[module_tags]
+Start-Command = "sh -lc 'exec \"$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent/bin/start-vmdocker-agent.sh\"'"
+`), 0o644); err != nil {
+		t.Fatalf("write manifest failed: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "derived from start_command") {
+		t.Fatalf("expected derived Start-Command error, got %v", err)
+	}
+}
+
+func TestLoadRejectsDerivedAgentProfileEnv(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "bad.toml")
+	if err := os.WriteFile(path, []byte(`name = "bad"
+runtime_profile = "harness/profiles/bad/profile.toml"
+dockerfile = "Dockerfile"
+image_name = "example/bad"
+
+[env]
+VMDOCKER_AGENT_PROFILE = "other"
+`), 0o644); err != nil {
+		t.Fatalf("write manifest failed: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "runtime_profile") {
+		t.Fatalf("expected derived profile env error, got %v", err)
 	}
 }

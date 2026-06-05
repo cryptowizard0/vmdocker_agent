@@ -12,6 +12,3 @@ skills = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/skills"
 
 [skills]
 include = ["hymx-runtime"]
-
-[env]
-RUNTIME_TYPE = "telegramcustomer"
