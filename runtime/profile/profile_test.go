@@ -33,7 +33,7 @@ func TestResolveSelectorMapsRuntimeType(t *testing.T) {
 	tests := map[string]string{
 		"claude":           "claude",
 		"openclaw":         "openclaw-legacy",
-		"telegramcustomer": "telegramcustomer-legacy",
+		"telegramcustomer": "tg-customer",
 		"test":             "test",
 	}
 
@@ -106,8 +106,8 @@ func TestLoadHermesProfileFromRepo(t *testing.T) {
 	if got.Backend != "telegramcustomer-legacy" {
 		t.Fatalf("backend = %q, want telegramcustomer-legacy", got.Backend)
 	}
-	if got.Env["RUNTIME_TYPE"] != "telegramcustomer" {
-		t.Fatalf("RUNTIME_TYPE = %q, want telegramcustomer", got.Env["RUNTIME_TYPE"])
+	if _, ok := got.Env["RUNTIME_TYPE"]; ok {
+		t.Fatalf("RUNTIME_TYPE should not be set by harness profile")
 	}
 }
 

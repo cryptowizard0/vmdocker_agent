@@ -19,6 +19,7 @@ const (
 	ProfileClaude                 = "claude"
 	ProfileOpenclawLegacy         = "openclaw-legacy"
 	ProfileTelegramCustomerLegacy = "telegramcustomer-legacy"
+	ProfileTGCustomer             = "tg-customer"
 	ProfileTest                   = "test"
 )
 
@@ -58,7 +59,7 @@ func ResolveSelector(lookup EnvLookup) string {
 	case ProfileClaude:
 		return ProfileClaude
 	case "telegramcustomer":
-		return ProfileTelegramCustomerLegacy
+		return ProfileTGCustomer
 	case ProfileTest:
 		return ProfileTest
 	case "openclaw", "":

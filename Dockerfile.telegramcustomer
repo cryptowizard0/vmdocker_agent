@@ -32,6 +32,7 @@ WORKDIR /app
 
 COPY --from=builder /app/main /app/main
 COPY start-vmdocker-agent.sh /usr/local/bin/start-vmdocker-agent.sh
+COPY start-vmdocker-agent-workspace.sh /usr/local/bin/start-vmdocker-agent-workspace.sh
 COPY bootstrap/telegramcustomer.sh /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh
 RUN mkdir -p \
     /opt/vmdocker-agent-bundle/bin \
@@ -42,7 +43,9 @@ RUN mkdir -p \
 COPY start-vmdocker-agent.sh /opt/vmdocker-agent-bundle/bin/start-vmdocker-agent.sh
 COPY bootstrap/telegramcustomer.sh /opt/vmdocker-agent-bundle/bootstrap/telegramcustomer.sh
 COPY harness/profiles/hermes /opt/vmdocker-agent-bundle/profiles/hermes
+COPY harness/profiles/tg-customer /opt/vmdocker-agent-bundle/profiles/tg-customer
 COPY harness/roles/hermes.md /opt/vmdocker-agent-bundle/roles/hermes.md
+COPY harness/roles/telegramcustomer-legacy.md /opt/vmdocker-agent-bundle/roles/telegramcustomer-legacy.md
 COPY harness/skills/ /opt/vmdocker-agent-bundle/skills/
 
 RUN set -eux; \
@@ -60,6 +63,7 @@ RUN set -eux; \
 RUN set -eux; \
     chmod +x \
         /usr/local/bin/start-vmdocker-agent.sh \
+        /usr/local/bin/start-vmdocker-agent-workspace.sh \
         /app/main \
         /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh \
         /opt/vmdocker-agent-bundle/bin/start-vmdocker-agent.sh \
@@ -70,7 +74,6 @@ RUN set -eux; \
     test -x /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh
 
 ENV VMDOCKER_AGENT_APP_ROOT=/app
-ENV VMDOCKER_AGENT_PROFILE=hermes
 ENV RUNTIME_TYPE=telegramcustomer
 WORKDIR /workspace
 

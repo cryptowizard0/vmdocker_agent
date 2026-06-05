@@ -1,4 +1,4 @@
-name = "telegramcustomer-legacy"
+name = "tg-customer"
 backend = "telegramcustomer-legacy"
 asset_root = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent"
 role = "roles/telegramcustomer-legacy.md"
@@ -12,6 +12,3 @@ skills = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/skills"
 
 [skills]
 include = []
-
-[env]
-RUNTIME_TYPE = "telegramcustomer"

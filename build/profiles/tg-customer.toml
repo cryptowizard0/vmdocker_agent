@@ -1,0 +1,10 @@
+name = "tg-customer"
+runtime_profile = "harness/profiles/tg-customer/profile.toml"
+dockerfile = "Dockerfile.telegramcustomer"
+image_name = "chriewebber/vmdocker-tg-customer:latest"
+
+[assets]
+bootstrap = ["telegramcustomer.sh"]
+
+[env]
+RUNTIME_TYPE = "telegramcustomer"
