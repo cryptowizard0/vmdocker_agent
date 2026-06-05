@@ -51,32 +51,24 @@ flowchart TD
 
 ```toml
 name = "claude"
-runtime_profile = "claude"
+runtime_profile = "harness/profiles/claude/profile.toml"
 dockerfile = "Dockerfile.claude"
-context = "."
 image_name = "chriswebber/docker-claude"
-start_command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}\"; bundle_root=\"${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}\"; if [ ! -x \"$asset_root/bin/start-vmdocker-agent.sh\" ] && [ -d \"$bundle_root\" ]; then mkdir -p \"$asset_root\"; cp -R \"$bundle_root/.\" \"$asset_root/\"; chmod +x \"$asset_root/bin/start-vmdocker-agent.sh\"; fi; exec \"$asset_root/bin/start-vmdocker-agent.sh\"'"
 
 [assets]
-profiles = ["claude"]
-skills = ["hymx-runtime"]
-roles = ["claude"]
 bootstrap = ["claude.sh"]
 
 [env]
-VMDOCKER_AGENT_PROFILE = "claude"
 RUNTIME_TYPE = "claude"
-
-[module_tags]
-Sandbox-Agent = "shell"
-Start-Command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}\"; bundle_root=\"${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}\"; if [ ! -x \"$asset_root/bin/start-vmdocker-agent.sh\" ] && [ -d \"$bundle_root\" ]; then mkdir -p \"$asset_root\"; cp -R \"$bundle_root/.\" \"$asset_root/\"; chmod +x \"$asset_root/bin/start-vmdocker-agent.sh\"; fi; exec \"$asset_root/bin/start-vmdocker-agent.sh\"'"
 ```
 
 关键点：
 
-- `runtime_profile = "claude"` 对应 `harness/profiles/claude/profile.toml`。
-- `Start-Command` 必须通过 `VMDOCKER_RUNTIME_WORKSPACE` 解析到 workspace。
+- `runtime_profile = "harness/profiles/claude/profile.toml"` 是 profile 的唯一事实来源；modulegen 会自动生成 `Container-Env-VMDOCKER_AGENT_PROFILE=claude`。
+- build profile 的 `[env]` 只放容器启动所需的额外环境变量，例如 entrypoint bootstrap 使用的 `RUNTIME_TYPE`；不要重复配置 `VMDOCKER_AGENT_PROFILE`。
+- `start_command` 默认是 `/usr/local/bin/start-vmdocker-agent-workspace.sh`；modulegen 会自动把它写成 module tag `Start-Command`。
 - 不要把 module 的标准启动契约写成 `/usr/local/bin/start-vmdocker-agent.sh`。
+- 完整字段说明见 [`docs/build-manu.md`](build-manu.md)。
 
 校验 build profile：
 
@@ -193,7 +185,7 @@ go run ./cmd/module -profile claude
 生成的 module tag 中应该包含 workspace-scoped `Start-Command`：
 
 ```text
-Start-Command=sh -lc 'asset_root="${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}" ...'
+Start-Command=/usr/local/bin/start-vmdocker-agent-workspace.sh
 ```
 
 ## 3. 配置 Claude Runtime Profile
@@ -217,9 +209,6 @@ skills = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/skills"
 
 [skills]
 include = ["hymx-runtime"]
-
-[env]
-RUNTIME_TYPE = "claude"
 ```
 
 关键点：
@@ -261,9 +250,8 @@ harness/skills/hymx-runtime/SKILL.md
 
 1. 新增目录：`harness/skills/<skill-name>/SKILL.md`
 2. 在 `harness/profiles/claude/profile.toml` 的 `include` 中加入 `<skill-name>`
-3. 在 `build/profiles/claude.toml` 的 `[assets].skills` 中加入 `<skill-name>`
 
-不需要改 runtime 代码。
+不需要改 runtime 代码。`build/profiles/claude.toml` 不再重复声明 skills；Dockerfile 仍需要确保对应 skill 被复制进 image bundle。
 
 ## 4. 启动 Claude Agent
 

@@ -26,7 +26,7 @@ The runtime behavior can be customized via environment variables.
 
 ### General
 - `VMDOCKER_AGENT_PROFILE`: Preferred agent profile selector. If unset, `RUNTIME_TYPE` maps to a compatibility profile.
-- `RUNTIME_TYPE`: Compatibility runtime selector (e.g., `openclaw`, `claude`, `telegramcustomer`, `test`). Hermes uses `VMDOCKER_AGENT_PROFILE=hermes` with `RUNTIME_TYPE=telegramcustomer`.
+- `RUNTIME_TYPE`: Compatibility runtime selector (e.g., `openclaw`, `claude`, `telegramcustomer`, `test`). Build profiles derive `VMDOCKER_AGENT_PROFILE` from `runtime_profile`; Hermes keeps `RUNTIME_TYPE=telegramcustomer` for the legacy backend/bootstrap path.
 - `CLAUDE_CODE_BIN`: Optional Claude CLI path override for custom images or tests.
 - `CLAUDE_CODE_TIMEOUT_MS`: Optional Claude CLI timeout in milliseconds (default: `600000`).
 - `CLAUDE_CODE_FLAGS`: Optional extra Claude CLI flags appended to the default headless invocation. Quote values with spaces.
@@ -177,14 +177,14 @@ This is the contract a portable `vmdocker_agent` image should expect from `vmdoc
 
 Sandbox startup now runs a security audit before launching OpenClaw. The image treats passwordless `sudo` for `agent` as a fatal misconfiguration and refuses to start if it is still present. Platform-level exposures such as `docker.sock`, `virtiofs`, and missing AppArmor/SELinux visibility are logged as high-priority warnings but do not block startup, because they are controlled by Docker Sandbox rather than this image.
 
-Runtime bootstrap now uses a workspace-scoped shared entrypoint plus runtime-specific hooks. The module `Start-Command` materializes the read-only image bundle into the mapped runtime workspace, then execs the workspace entrypoint:
+Runtime bootstrap now uses a workspace-scoped shared entrypoint plus runtime-specific hooks. The module `Start-Command` runs a small workspace wrapper that materializes the read-only image bundle into the mapped runtime workspace, then execs the workspace entrypoint:
 
 ```text
-Start-Command=sh -lc 'asset_root="${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}"; bundle_root="${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}"; if [ ! -x "$asset_root/bin/start-vmdocker-agent.sh" ] && [ -d "$bundle_root" ]; then mkdir -p "$asset_root"; cp -R "$bundle_root/." "$asset_root/"; chmod +x "$asset_root/bin/start-vmdocker-agent.sh"; fi; exec "$asset_root/bin/start-vmdocker-agent.sh"'
+Start-Command=/usr/local/bin/start-vmdocker-agent-workspace.sh
 ```
 
 - shared entrypoint: `${VMDOCKER_AGENT_ASSET_ROOT}/bin/start-vmdocker-agent.sh`
-- runtime hooks: `${VMDOCKER_AGENT_ASSET_ROOT}/bootstrap/<runtime>.sh`
+- bootstraps: `${VMDOCKER_AGENT_ASSET_ROOT}/bootstrap/<runtime>.sh`
 
 The shared entrypoint is responsible for:
 
@@ -275,6 +275,8 @@ VMDOCKER_PRIVATE_KEY=
 
 Build and image settings now come from `build/profiles/<profile>.toml`. The profile command checks whether the configured image exists locally. If it is missing, it builds the image from the profile Dockerfile before generating the module.
 
+Build profile fields and defaults are documented in [`docs/build-manu.md`](docs/build-manu.md).
+
 What `go run ./cmd/module -profile claude` does now:
 
 1. Load `build/profiles/claude.toml`
@@ -293,8 +295,9 @@ The generated module does not pin a runtime backend anymore. Backend selection n
 
 The generated module should carry the image startup contract through module tags:
 
-- `Start-Command=sh -lc 'asset_root="${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}"; bundle_root="${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}"; if [ ! -x "$asset_root/bin/start-vmdocker-agent.sh" ] && [ -d "$bundle_root" ]; then mkdir -p "$asset_root"; cp -R "$bundle_root/." "$asset_root/"; chmod +x "$asset_root/bin/start-vmdocker-agent.sh"; fi; exec "$asset_root/bin/start-vmdocker-agent.sh"'`
-- optional metadata such as `Sandbox-Agent` and `Openclaw-Version`
+- `Start-Command=/usr/local/bin/start-vmdocker-agent-workspace.sh`
+- default metadata such as `Sandbox-Agent=shell`
+- optional metadata such as `Openclaw-Version`
 
 Recommended split:
 

@@ -33,6 +33,8 @@ export GITHUB_TOKEN=<token-with-agent-hub-access>
 GITHUB_TOKEN="$(gh auth token)" go run ./cmd/module -profile hermes
 ```
 
+`cmd/module` 在没有 `GITHUB_TOKEN`/`GH_TOKEN` 时也会自动尝试读取 `gh auth token`，但显式设置环境变量更容易排查权限问题。
+
 ## 2. 校验 Build Profile
 
 ```bash
@@ -43,11 +45,15 @@ Hermes build profile 位于 `build/profiles/hermes.toml`，核心字段：
 
 ```toml
 name = "hermes"
-runtime_profile = "hermes"
+runtime_profile = "harness/profiles/hermes/profile.toml"
 dockerfile = "Dockerfile.telegramcustomer"
-context = "."
 image_name = "sandytest456/docker-telegramcustomer:latest"
+
+[env]
+RUNTIME_TYPE = "telegramcustomer"
 ```
+
+`runtime_profile = "harness/profiles/hermes/profile.toml"` 是 profile 的唯一事实来源；modulegen 会自动生成 `Container-Env-VMDOCKER_AGENT_PROFILE=hermes`，不要在 build profile 的 `[env]` 中重复配置 `VMDOCKER_AGENT_PROFILE`。这里的 `RUNTIME_TYPE` 只用于容器 entrypoint/bootstrap 选择，不写入 harness profile。完整字段说明见 [`docs/build-manu.md`](build-manu.md)。
 
 ## 3. 生成 Module
 
@@ -77,12 +83,9 @@ harness/profiles/hermes/profile.toml
 ```toml
 name = "hermes"
 backend = "telegramcustomer-legacy"
-
-[env]
-RUNTIME_TYPE = "telegramcustomer"
 ```
 
-旧路径 `RUNTIME_TYPE=telegramcustomer` 仍映射到 `telegramcustomer-legacy` profile；新流程推荐使用 `VMDOCKER_AGENT_PROFILE=hermes`。
+Hermes profile 只负责选择 harness/backend；`RUNTIME_TYPE` 不放在 harness profile 中。新流程使用 module tag 注入 `VMDOCKER_AGENT_PROFILE=hermes`，entrypoint 需要的 bootstrap selector 由 build profile 的 container env 提供。
 
 ## 5. Smoke Test
 

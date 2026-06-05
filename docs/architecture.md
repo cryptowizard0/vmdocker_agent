@@ -90,9 +90,6 @@ skills = "${VMDOCKER_RUNTIME_WORKSPACE}/.vmdocker-agent/skills"
 
 [skills]
 include = ["hymx-runtime"]
-
-[env]
-RUNTIME_TYPE = "claude"
 ```
 
 Profile 主要承担这些职责：
@@ -101,7 +98,7 @@ Profile 主要承担这些职责：
 - 声明 workspace、home、context、memory、skills 等路径模板。
 - 声明 role 文件。
 - 声明启用哪些 skills。
-- 声明 profile 需要的默认 env。
+- 声明 Agent 需要的非 selector 默认 env。`RUNTIME_TYPE` 不应放在 harness profile 中。
 
 Profile 的选择规则集中在 `runtime/profile`：
 
@@ -379,34 +376,28 @@ build/profiles/<name>.toml
 
 ```toml
 name = "claude"
-runtime_profile = "claude"
+runtime_profile = "harness/profiles/claude/profile.toml"
 dockerfile = "Dockerfile.claude"
 image_name = "chriswebber/docker-claude"
-start_command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}\"; bundle_root=\"${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}\"; if [ ! -x \"$asset_root/bin/start-vmdocker-agent.sh\" ] && [ -d \"$bundle_root\" ]; then mkdir -p \"$asset_root\"; cp -R \"$bundle_root/.\" \"$asset_root/\"; chmod +x \"$asset_root/bin/start-vmdocker-agent.sh\"; fi; exec \"$asset_root/bin/start-vmdocker-agent.sh\"'"
 
 [assets]
-profiles = ["claude"]
-skills = ["hymx-runtime"]
-roles = ["claude"]
 bootstrap = ["claude.sh"]
 
 [env]
-VMDOCKER_AGENT_PROFILE = "claude"
 RUNTIME_TYPE = "claude"
-
-[module_tags]
-Sandbox-Agent = "shell"
-Start-Command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}\"; bundle_root=\"${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}\"; if [ ! -x \"$asset_root/bin/start-vmdocker-agent.sh\" ] && [ -d \"$bundle_root\" ]; then mkdir -p \"$asset_root\"; cp -R \"$bundle_root/.\" \"$asset_root/\"; chmod +x \"$asset_root/bin/start-vmdocker-agent.sh\"; fi; exec \"$asset_root/bin/start-vmdocker-agent.sh\"'"
 ```
+
+完整字段说明见 [`docs/build-manu.md`](build-manu.md)。
 
 `buildmanifest` 当前负责解析和校验 build profile，至少保证：
 
 - `name` 必填。
-- `runtime_profile` 必填。
+- `runtime_profile` 必填，且必须是相对 `profile.toml` 路径。
+- `VMDOCKER_AGENT_PROFILE` 由 `runtime_profile` 自动派生为 module 的 `Container-Env-VMDOCKER_AGENT_PROFILE`，不要在 `[env]` 中重复配置。
 - `dockerfile` 必填。
 - `image_name` 必填。
-- `start_command` 必须通过 `VMDOCKER_RUNTIME_WORKSPACE` 解析。
-- module tag 中的 `Start-Command` 如果存在，也必须通过 `VMDOCKER_RUNTIME_WORKSPACE` 解析。
+- `start_command` 默认使用 `/usr/local/bin/start-vmdocker-agent-workspace.sh`；自定义命令必须通过 `VMDOCKER_RUNTIME_WORKSPACE` 解析。
+- module tag 中不要重复配置 `Start-Command`；modulegen 会从 `start_command` 自动派生。
 
 ### Module Start-Command 契约
 
@@ -419,7 +410,7 @@ Start-Command = "sh -lc 'asset_root=\"${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUN
 新契约改为 workspace-scoped：
 
 ```text
-sh -lc 'asset_root="${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vmdocker-agent}"; bundle_root="${VMDOCKER_AGENT_BUNDLE_ROOT:-/opt/vmdocker-agent-bundle}"; if [ ! -x "$asset_root/bin/start-vmdocker-agent.sh" ] && [ -d "$bundle_root" ]; then mkdir -p "$asset_root"; cp -R "$bundle_root/." "$asset_root/"; chmod +x "$asset_root/bin/start-vmdocker-agent.sh"; fi; exec "$asset_root/bin/start-vmdocker-agent.sh"'
+/usr/local/bin/start-vmdocker-agent-workspace.sh
 ```
 
 它的执行逻辑是：
@@ -436,7 +427,7 @@ sh -lc 'asset_root="${VMDOCKER_AGENT_ASSET_ROOT:-$VMDOCKER_RUNTIME_WORKSPACE/.vm
    - 给 workspace entrypoint 加执行权限。
 4. `exec "$asset_root/bin/start-vmdocker-agent.sh"`。
 
-这保证 module 对 vmdocker 暴露的标准启动点位于 workspace 内，而不是镜像内 `/usr/local`。
+这保证 module 对 vmdocker 暴露的是稳定 wrapper，而真正的 runtime entrypoint 会先物化到 workspace 内再执行。
 
 ### start-vmdocker-agent.sh
 
@@ -621,9 +612,9 @@ harness/profiles/<agent>/profile.toml
 - `role`
 - `[paths]`
 - `[skills]`
-- `[env]`
 
 Profile 中的路径必须解析到 `VMDOCKER_RUNTIME_WORKSPACE` 下。
+如果确实需要 Agent 默认业务环境变量，可以使用可选 `[env]`，但 selector 类变量如 `RUNTIME_TYPE` 不放在 harness profile 中。
 
 ### 3. 添加 role
 
