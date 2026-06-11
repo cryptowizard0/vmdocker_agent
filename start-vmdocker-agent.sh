@@ -150,7 +150,7 @@ health_probe() {
 
 validate_runtime_type() {
     case "$1" in
-        openclaw|claude|telegramcustomer|test)
+        openclaw|claude|telegramcustomer|hermes|test)
             return 0
             ;;
         *)
@@ -188,7 +188,11 @@ if ! validate_runtime_type "${runtime_type}"; then
 fi
 
 entry_info "runtime type selected: ${runtime_type}"
-run_security_audit
+if [ "${VMDOCKER_AGENT_SKIP_SECURITY_AUDIT:-}" = "true" ]; then
+    entry_warn "startup security audit skipped by VMDOCKER_AGENT_SKIP_SECURITY_AUDIT"
+else
+    run_security_audit
+fi
 run_bootstrap_hook "${runtime_type}"
 
 exec "${APP_ROOT}/main"

@@ -7,6 +7,7 @@ import (
 
 	"github.com/cryptowizard0/vmdocker_agent/common"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/claudecode"
+	"github.com/cryptowizard0/vmdocker_agent/runtime/hermes"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/openclaw"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/schema"
 	"github.com/cryptowizard0/vmdocker_agent/runtime/telegramcustomer"
@@ -22,6 +23,7 @@ const (
 	RuntimeTypeOpenclaw         = "openclaw"
 	RuntimeTypeClaude           = "claude"
 	RuntimeTypeTelegramCustomer = "telegramcustomer"
+	RuntimeTypeHermes           = "hermes"
 )
 
 type Runtime struct {
@@ -69,6 +71,12 @@ func newRuntime(env vmmSchema.Env, nodeAddr, aoDir string, tags []goarSchema.Tag
 			vm, err = telegramcustomer.NewRestored(state, spawnParams)
 		} else {
 			vm, err = telegramcustomer.NewWithParams(spawnParams)
+		}
+	case RuntimeTypeHermes:
+		if restore {
+			vm, err = hermes.NewRestored(state, spawnParams)
+		} else {
+			vm, err = hermes.NewWithParams(spawnParams)
 		}
 	default:
 		return nil, fmt.Errorf("runtime type not supported: %s", runtimeType)

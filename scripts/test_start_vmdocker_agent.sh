@@ -49,6 +49,15 @@ bootstrap_telegramcustomer_main "$@"
 EOF
 chmod +x "${HOOKS_DIR}/telegramcustomer.sh"
 
+cat > "${HOOKS_DIR}/hermes.sh" <<'EOF'
+#!/bin/sh
+bootstrap_hermes_main() {
+    printf 'hook:hermes\n' >> "${TRACE_FILE}"
+}
+bootstrap_hermes_main "$@"
+EOF
+chmod +x "${HOOKS_DIR}/hermes.sh"
+
 assert_contains() {
   local file="$1"
   local expected="$2"
@@ -95,6 +104,14 @@ assert_contains "${TRACE_FILE}" "hook:telegramcustomer"
 assert_contains "${TRACE_FILE}" "main:telegramcustomer"
 assert_not_contains "${TRACE_FILE}" "hook:openclaw"
 assert_not_contains "${TRACE_FILE}" "hook:claude"
+
+: > "${TRACE_FILE}"
+run_entrypoint hermes
+assert_contains "${TRACE_FILE}" "hook:hermes"
+assert_contains "${TRACE_FILE}" "main:hermes"
+assert_not_contains "${TRACE_FILE}" "hook:openclaw"
+assert_not_contains "${TRACE_FILE}" "hook:claude"
+assert_not_contains "${TRACE_FILE}" "hook:telegramcustomer"
 
 : > "${TRACE_FILE}"
 run_entrypoint test
