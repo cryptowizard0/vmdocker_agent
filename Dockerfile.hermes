@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.4
-FROM golang:1.25 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -9,7 +12,7 @@ RUN go mod download
 
 COPY . .
 RUN go mod edit -replace github.com/xingj404-lab/agent-hub=/tmp/agent-hub
-RUN CGO_ENABLED=0 go build -o /app/main .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /app/main .
 
 FROM sandytest456/hermes-agent:linux-full
 
@@ -17,6 +20,7 @@ USER root
 WORKDIR /app
 
 COPY --from=builder /app/main /app/main
+COPY --from=agent_hub /hermesAgent/tools/browser-harness /tmp/browser-harness
 COPY start-vmdocker-agent.sh /usr/local/bin/start-vmdocker-agent.sh
 COPY bootstrap/hermes.sh /usr/local/lib/vmdocker-agent/bootstrap/hermes.sh
 
@@ -37,9 +41,21 @@ RUN set -eux; \
     python -c 'import telegram; print(telegram.__version__)'
 
 RUN set -eux; \
+    if ! command -v uv >/dev/null 2>&1; then \
+        python -m pip install --no-cache-dir uv; \
+    fi; \
+    mkdir -p /root/.harness; \
+    cp -a /tmp/browser-harness /root/.harness/browser-harness; \
+    cd /root/.harness/browser-harness; \
+    PATH="/root/.local/bin:${PATH}" uv tool install -e .; \
+    /root/.local/share/uv/tools/browser-harness/bin/python -c 'import browser_harness._ipc; import browser_harness.admin'; \
+    test -x /root/.local/bin/browser-harness; \
+    rm -rf /tmp/browser-harness
+
+RUN set -eux; \
     { \
         echo '#!/bin/sh'; \
-        echo 'if [ -n "${HERMES_BROWSER_HARNESS_BIN:-}" ] && [ -x "${HERMES_BROWSER_HARNESS_BIN}" ]; then'; \
+        echo 'if [ -n "${HERMES_BROWSER_HARNESS_BIN:-}" ] && [ -x "${HERMES_BROWSER_HARNESS_BIN}" ] && [ "${HERMES_BROWSER_HARNESS_BIN}" != "$0" ]; then'; \
         echo '    exec "${HERMES_BROWSER_HARNESS_BIN}" "$@"'; \
         echo 'fi'; \
         echo 'if [ -n "${HOME:-}" ] && [ -x "${HOME}/.local/bin/browser-harness" ]; then'; \
@@ -66,6 +82,8 @@ ENV HOME=/root
 ENV SHELL=/bin/bash
 ENV PATH=/root/.local/bin:/usr/local/bin:${PATH}
 ENV HERMES_AGENT_LLM_PROVIDER=custom
+ENV HERMES_BROWSER_HARNESS_PYTHON=/root/.local/share/uv/tools/browser-harness/bin/python
+ENV HERMES_BROWSER_HARNESS_BIN=/root/.local/bin/browser-harness
 ENV VMDOCKER_AGENT_SKIP_SECURITY_AUDIT=true
 WORKDIR /workspace
 

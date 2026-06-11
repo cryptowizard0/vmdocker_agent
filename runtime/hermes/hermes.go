@@ -17,7 +17,12 @@ import (
 const checkpointFormatV1 = "hermes.runtime.v1"
 
 var log = common.NewLog("hermes_agent")
-var hermes *hermesAgent.HermesAgent
+var (
+	hermesMu       sync.Mutex
+	hermes         *hermesAgent.HermesAgent
+	hermesStarting bool
+	hermesLastErr  string
+)
 
 type Config struct {
 	Cwd         string
@@ -134,7 +139,7 @@ func startHermes(cfg Config) error {
 		return fmt.Errorf("llmModel is required")
 	}
 
-	hermes = hermesAgent.New(hermesAgent.Config{
+	agent := hermesAgent.New(hermesAgent.Config{
 		LLMProvider:      cfg.LLMProvider,
 		LLMModel:         cfg.LLMModel,
 		LLMBaseURL:       cfg.LLMBaseURL,
@@ -143,52 +148,74 @@ func startHermes(cfg Config) error {
 		AccessServerURL:  cfg.AccessServerURL,
 		BrowserAPIKey:    cfg.BrowserAPIKey,
 	})
-	if err := hermes.Run(); err != nil {
-		hermes.Close()
+	if err := agent.Run(); err != nil {
+		agent.Close()
 		return err
 	}
+
+	hermesMu.Lock()
+	hermes = agent
+	hermesLastErr = ""
+	hermesMu.Unlock()
 	return nil
 }
 
 func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]string) (res vmmSchema.Result, err error) {
 	switch meta.Action {
 	case "start":
+		hermesMu.Lock()
 		if hermes != nil {
+			hermesMu.Unlock()
 			res.Error = fmt.Errorf("hermes already running")
 			return res, nil
 		}
+		if hermesStarting {
+			hermesMu.Unlock()
+			res.Error = fmt.Errorf("hermes is starting")
+			return res, nil
+		}
+		hermesStarting = true
+		hermesLastErr = ""
+		hermesMu.Unlock()
+
 		provider := firstNonEmptyParam(params, "LLM_PROVIDER", "llmProvider", "provider")
 		if provider == "" {
 			provider = "custom"
 		}
 		baseURL := firstNonEmptyParam(params, "LLM_BASE_URL", "LLM_BASEURL", "llmBaseURL", "baseURL")
 		if baseURL == "" {
+			markHermesStartFinished("LLM_BASE_URL is required")
 			res.Error = fmt.Errorf("LLM_BASE_URL is required")
 			return res, nil
 		}
 		apiKey := firstNonEmptyParam(params, "LLM_API_KEY", "llmApiKey", "apiKey")
 		if apiKey == "" {
+			markHermesStartFinished("LLM_API_KEY is required")
 			res.Error = fmt.Errorf("LLM_API_KEY is required")
 			return res, nil
 		}
 		model := firstNonEmptyParam(params, "LLM_MODEL", "llmModel", "model")
 		if model == "" {
+			markHermesStartFinished("LLM_MODEL is required")
 			res.Error = fmt.Errorf("LLM_MODEL is required")
 			return res, nil
 		}
 		botToken := firstNonEmptyParam(params, "Bot_Token", "BOT_TOKEN", "botToken", "telegramBotToken")
 		if botToken == "" {
+			markHermesStartFinished("bot_token is required")
 			res.Error = fmt.Errorf("bot_token is required")
 			return res, nil
 		}
 
 		accessUrl := firstNonEmptyParam(params, "ACCESS_SERVER_URL", "accessServerURL", "accessUrl")
 		if accessUrl == "" {
+			markHermesStartFinished("ACCESS_SERVER_URL is required")
 			res.Error = fmt.Errorf("ACCESS_SERVER_URL is required")
 			return res, nil
 		}
 		browserApiKey := firstNonEmptyParam(params, "BROWSER_API_KEY", "browserAPIKey", "browserApiKey")
 		if browserApiKey == "" {
+			markHermesStartFinished("BROWSER_API_KEY is required")
 			res.Error = fmt.Errorf("BROWSER_API_KEY is required")
 			return res, nil
 		}
@@ -205,27 +232,80 @@ func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]stri
 		cfg := r.config
 		r.mu.Unlock()
 
-		if err = startHermes(cfg); err != nil {
-			res.Error = err
-			r.mu.Lock()
-			r.config.Running = false
-			r.mu.Unlock()
-			return res, nil
-		}
+		go r.startHermesInBackground(cfg)
+		res.Data = "hermes start requested"
 		return res, nil
 	case "stop":
-		if hermes == nil {
+		hermesMu.Lock()
+		if hermesStarting {
+			hermesMu.Unlock()
+			res.Error = fmt.Errorf("hermes is starting")
+			return res, nil
+		}
+		agent := hermes
+		if agent == nil {
+			hermesMu.Unlock()
 			res.Error = fmt.Errorf("hermes already stopped")
 			return res, nil
 		}
-		hermes.Close()
 		hermes = nil
+		hermesLastErr = ""
+		hermesMu.Unlock()
+
+		agent.Close()
 		r.mu.Lock()
 		r.config.Running = false
 		r.mu.Unlock()
 		return res, nil
+	case "status":
+		res.Data = hermesStatus()
+		return res, nil
 	}
 	return vmmSchema.Result{}, fmt.Errorf("hermes apply is not implemented")
+}
+
+func (r *Runtime) startHermesInBackground(cfg Config) {
+	log.Info("hermes async start begin")
+	err := startHermes(cfg)
+
+	hermesMu.Lock()
+	hermesStarting = false
+	if err != nil {
+		hermesLastErr = err.Error()
+	}
+	hermesMu.Unlock()
+
+	if err != nil {
+		log.Error("hermes async start failed", "err", err)
+		r.mu.Lock()
+		r.config.Running = false
+		r.mu.Unlock()
+		return
+	}
+	log.Info("hermes async start complete")
+}
+
+func markHermesStartFinished(lastErr string) {
+	hermesMu.Lock()
+	hermesStarting = false
+	hermesLastErr = lastErr
+	hermesMu.Unlock()
+}
+
+func hermesStatus() string {
+	hermesMu.Lock()
+	defer hermesMu.Unlock()
+
+	switch {
+	case hermes != nil:
+		return "running"
+	case hermesStarting:
+		return "starting"
+	case hermesLastErr != "":
+		return "start_failed: " + hermesLastErr
+	default:
+		return "stopped"
+	}
 }
 
 func (r *Runtime) Checkpoint() (string, error) {

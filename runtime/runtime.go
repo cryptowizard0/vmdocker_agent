@@ -102,6 +102,9 @@ func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]stri
 	if err != nil {
 		return "", fmt.Errorf("runtime apply failed: %w", err)
 	}
+	if response.Error != nil {
+		return "", fmt.Errorf("runtime apply failed: %w", response.Error)
+	}
 	outboxJson, err := json.Marshal(response)
 	if err != nil {
 		log.Error("marshal outbox failed", "err", err)
