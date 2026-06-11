@@ -138,6 +138,9 @@ func startHermes(cfg Config) error {
 	if cfg.LLMModel == "" {
 		return fmt.Errorf("llmModel is required")
 	}
+	if err := ensureBrowserHarnessRuntimeEnv(); err != nil {
+		return err
+	}
 
 	agent := hermesAgent.New(hermesAgent.Config{
 		LLMProvider:      cfg.LLMProvider,
@@ -158,6 +161,59 @@ func startHermes(cfg Config) error {
 	hermesLastErr = ""
 	hermesMu.Unlock()
 	return nil
+}
+
+func ensureBrowserHarnessRuntimeEnv() error {
+	tmpDir := strings.TrimSpace(os.Getenv("BH_TMP_DIR"))
+	runtimeDir := strings.TrimSpace(os.Getenv("BH_RUNTIME_DIR"))
+	if tmpDir != "" && runtimeDir != "" && writableDir(tmpDir) && writableDir(runtimeDir) {
+		return nil
+	}
+
+	for _, dir := range browserHarnessRuntimeDirCandidates() {
+		if !writableDir(dir) {
+			continue
+		}
+
+		if err := os.Setenv("BH_TMP_DIR", dir); err != nil {
+			return fmt.Errorf("set BH_TMP_DIR: %w", err)
+		}
+		if err := os.Setenv("BH_RUNTIME_DIR", dir); err != nil {
+			return fmt.Errorf("set BH_RUNTIME_DIR: %w", err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("no writable browser-harness runtime directory found")
+}
+
+func browserHarnessRuntimeDirCandidates() []string {
+	candidates := []string{
+		"/dev/shm/hermes-bh",
+		"/run/hermes-bh",
+		"/tmp/hermes-bh",
+	}
+	if homeDir := resolveHomeDir(); homeDir != "" {
+		candidates = append(candidates, filepath.Join(homeDir, ".hermes", "browser-harness", "runtime"))
+	}
+	return candidates
+}
+
+func writableDir(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false
+	}
+	probe, err := os.CreateTemp(dir, ".write-test-")
+	if err != nil {
+		return false
+	}
+	probeName := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(probeName)
+	return true
 }
 
 func (r *Runtime) Apply(from string, meta vmmSchema.Meta, params map[string]string) (res vmmSchema.Result, err error) {

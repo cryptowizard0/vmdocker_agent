@@ -84,6 +84,8 @@ ENV PATH=/root/.local/bin:/usr/local/bin:${PATH}
 ENV HERMES_AGENT_LLM_PROVIDER=custom
 ENV HERMES_BROWSER_HARNESS_PYTHON=/root/.local/share/uv/tools/browser-harness/bin/python
 ENV HERMES_BROWSER_HARNESS_BIN=/root/.local/bin/browser-harness
+ENV BH_TMP_DIR=/dev/shm/hermes-bh
+ENV BH_RUNTIME_DIR=/dev/shm/hermes-bh
 ENV VMDOCKER_AGENT_SKIP_SECURITY_AUDIT=true
 WORKDIR /workspace
 
