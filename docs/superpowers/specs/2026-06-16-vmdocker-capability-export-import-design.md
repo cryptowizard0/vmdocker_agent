@@ -34,7 +34,7 @@
 1. 向 A 进程发 `Action: "Export"` 消息，能得到一个 `cap-<itemId>.json` 能力 module（经 `Result.Data` 回传）。
 2. 向 B 进程发 `Action: "Import"` 消息（module 字节经 `meta.Data` 传入），能完成导入。
 3. B 的 `workspace/` 中出现与 A 相同的 `SOUL.md` 和 `skills/` 真实文件。
-4. 导出包不包含 `private/`、`.openclaw/`、`workspace/data/` 或其他非约定内容。
+4. 导出包**只**含 public 约定路径；任何 runtime 状态、凭据、HOME 或用户数据（无论 openclaw / claude code / hermes 等哪种 runtime）都不进包。
 5. 导入过程能校验格式、manifest、sha256、路径越界和大小限制。
 6. `vmdocker_agent` 代码、镜像、HTTP 接口均无任何改动。
 
@@ -150,16 +150,18 @@ sequenceDiagram
 ```text
 sandbox_workspace/<pid>/
 ├── workspace/                 原文件真实存放处，VMDOCKER_AGENT_WORKSPACE
-│   ├── SOUL.md                真实文件
-│   ├── skills/<name>/...      真实目录
+│   ├── SOUL.md                真实文件（agent 无关，可导出）
+│   ├── skills/<name>/...      真实目录（agent 无关，可导出）
 │   └── data/                  用户数据示例，不导出
-├── public/                    可导出视图，只放相对软链接
+├── public/                    可导出视图，只放相对软链接（导出白名单）
 │   ├── SOUL.md  -> ../workspace/SOUL.md
 │   └── skills   -> ../workspace/skills
-├── private/                   不可导出视图，只供检视
-│   ├── openclaw -> ../.openclaw
-│   └── data     -> ../workspace/data
-├── .openclaw/
+├── private/                   不可导出视图，仅供检视（best-effort，按 runtime 实际存在的目录建链）
+│   ├── runtime-state -> ../.openclaw   # openclaw 示例；claude code≈.claude、hermes 另有
+│   ├── home          -> ../.home
+│   ├── xdg           -> ../.xdg
+│   └── data          -> ../workspace/data
+├── .openclaw/ | .claude/ | ...   runtime 状态目录（随 runtime 不同而不同）
 ├── .home/
 ├── .tmp/
 └── .xdg/
@@ -170,16 +172,31 @@ sandbox_workspace/<pid>/
 1. 原文件仍留在 `workspace/`，不改变现有运行时读写习惯。
 2. `public/` 是“导出允许列表”的可见表达，便于人和系统理解。
 3. 相对软链接在 checkpoint/restore 或整体搬动 sandbox 后仍然有效。
-4. `private/` 让不可导出的敏感路径显式存在，但导出器永远不读取它。
+4. `private/` 让敏感路径显式可见，便于检视；但它**不是安全边界**——见下方“白名单 ≠ 黑名单”。
+
+> **vmdocker / vmdocker_agent 兼容多种 agent runtime（openclaw、claude code、hermes 等），不同 runtime 的状态/凭据目录各不相同。** 因此 private 清单只是 best-effort 的可视化，不假定枚举完整。
+
+#### 白名单 ≠ 黑名单（关键安全语义）
+
+导出的安全边界是 **public 白名单**：导出器只读 §6.2 public 约定路径，**其余一切默认私有、永不导出**——无论它在不在 `private/` 视图里、属于哪种 runtime。所以即使将来新增了某个 runtime 的新状态目录、且没来得及加进 private 视图，也绝不会被导出。`private/` 的作用是“让人看见有哪些敏感数据”，不是“枚举所有不可导出项”。
 
 ### 6.2 约定路径
+
+public 是导出白名单，agent 无关：
 
 | 视图 | 链接路径 | 目标路径 | 用途 |
 |---|---|---|---|
 | public | `public/SOUL.md` | `workspace/SOUL.md` | agent 人格与行为约束 |
 | public | `public/skills` | `workspace/skills` | agent 能力集合 |
-| private | `private/openclaw` | `.openclaw` | state、凭据、session，不导出 |
-| private | `private/data` | `workspace/data` | 用户数据约定目录，不导出 |
+
+private 是 best-effort 检视视图，**仅对实际存在的目标建链**，可随支持的 runtime 扩展：
+
+| 视图 | 链接路径 | 目标路径（示例） | 说明 |
+|---|---|---|---|
+| private | `private/runtime-state` | openclaw→`.openclaw`；claude code→`.claude`；hermes→其状态目录 | runtime 状态/凭据/session |
+| private | `private/home` | `.home` | 容器 HOME |
+| private | `private/xdg` | `.xdg` | XDG config/cache/state |
+| private | `private/data` | `workspace/data` | 用户数据约定目录 |
 
 ### 6.3 env.go 改动
 
@@ -196,21 +213,40 @@ type viewLink struct {
     Target string // 相对 workspace 根
 }
 
+// public 是导出白名单，agent 无关。
 var publicConventionLinks = []viewLink{
     {"public/SOUL.md", "workspace/SOUL.md"},
     {"public/skills", "workspace/skills"},
 }
 
-var privateConventionLinks = []viewLink{
-    {"private/openclaw", ".openclaw"},
+// private 仅为检视便利，best-effort：目标不存在则跳过（见 ensureWorkspaceViews）。
+// 跨 runtime：runtime 状态目录随 RUNTIME_TYPE 解析（openclaw=.openclaw、claude code=.claude…），
+// 其余为 runtime 无关的通用沙箱目录。这里的 private 清单不需要、也不假定枚举完整——
+// 安全边界由 public 白名单保证，不由 private 黑名单保证。
+var privateCommonLinks = []viewLink{
+    {"private/home", ".home"},
+    {"private/xdg", ".xdg"},
     {"private/data", "workspace/data"},
+}
+
+// 按 RUNTIME_TYPE 返回该 runtime 的状态目录链接（不识别的 runtime 返回空，跳过即可）。
+func privateRuntimeStateLink(runtimeType string) (viewLink, bool) {
+    switch strings.ToLower(strings.TrimSpace(runtimeType)) {
+    case "openclaw":
+        return viewLink{"private/runtime-state", ".openclaw"}, true
+    case "claude", "claudecode", "claude-code":
+        return viewLink{"private/runtime-state", ".claude"}, true
+    // hermes 等其它 runtime 在支持时补充
+    default:
+        return viewLink{}, false
+    }
 }
 ```
 
 | 函数 | 行为 |
 |---|---|
 | `runtimeWorkspaceLayoutDirs(workspace)` | 追加创建 `public/`、`private/` |
-| `ensureWorkspaceViews(workspace string) error` | 幂等建立约定软链接 |
+| `ensureWorkspaceViews(workspace, runtimeType string) error` | 幂等建立约定软链接（public 全建；private = `privateCommonLinks` + 按 `runtimeType` 解析的 runtime 状态链接，仅对存在的目标建链） |
 | `resolveWithinWorkspace(workspace, path string) (string, error)` | 解析路径并确认结果仍在 sandbox 根内 |
 | `ensureRuntimeWorkspaceLayout` | 末尾调用 `ensureWorkspaceViews` |
 
@@ -373,7 +409,7 @@ func Import(workspaceRoot string, moduleBytes []byte, opts ImportOptions) (Impor
 ## 9. 安全与边界
 
 - **路径穿越**：软链接解引用与 tar 解包目标都过 `resolveWithinWorkspace` 白名单；拒绝绝对路径软链接、`../` 越界、tar 内 symlink 条目。
-- **private 永不进包**：导出器只认 public 约定清单，从不读 `private/` 或 `workspace/` 内非约定路径。
+- **白名单边界（非黑名单）**：导出器只认 public 约定清单，其余一切默认私有、永不导出——与是哪种 runtime（openclaw/claude code/hermes…）、是否出现在 `private/` 视图无关。新增 runtime 的状态目录即便未登记进 private 视图，也不会泄露。
 - **不覆盖真实文件**：建视图遇同名真实文件 → warn 跳过。
 - **大小限制**：导入 `MaxBytes`（默认 64 MiB，可由 `VMDOCKER_CAPABILITY_MAX_BYTES` 覆盖），防 zip-bomb。
 - **原子性**：导入先写临时目录、全量 sha256 校验通过后再 rename；任一步失败整体回滚。
