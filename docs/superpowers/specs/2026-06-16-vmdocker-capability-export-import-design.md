@@ -21,7 +21,7 @@
 ### 2.1 要解决的问题
 
 - 让 agent 镜像的构建**标准化、可声明**：用户只描述意图（基础镜像、bin、工具、public、startup、自定义 RUN），系统生成统一、加固的 Dockerfile。
-- 让一个 agent 的**能力可被复刻**：把 public 目录（如 `SOUL.md`、`skills/`）+ 构建配方打包，导入到另一个 agent。
+- 让一个 agent 的**能力可被复刻**：把 public 目录（如 `skills/`、`persona/`）+ 构建配方打包，导入到另一个 agent。
 - 让构建产物成为**自包含、可移植的 module**：携带镜像（可直接 run 出全新 agent）+ profile（可重建）+ public.zip（可覆盖导入）。
 
 ### 2.2 成功标准
@@ -45,8 +45,8 @@
 |---|---|
 | **Profile** | 一份声明式 JSON，描述如何标准化构建一个 agent 镜像（§5）。是 module 的一等成员。 |
 | **标准化 Dockerfile** | 由 profile 确定性生成的 Dockerfile，叠加用户不可见的约定加固（§6）。 |
-| **Module** | 统一载体：一个签名 BundleItem，其 `data` 是一个容器 tar，成员为 `image.tar.gz` + `profile.json`（+ Export 时 `public.zip`）（§7）。 |
-| **public** | 由 `profile.public` 路径清单定义的可导出内容；运行时另以软链接视图呈现（§9）。 |
+| **Module** | 统一载体：一个签名 BundleItem，其 `data` 是一个容器 tar，成员为 `image.tar.gz` + `profile.toml`（+ Export 时 `public.zip`）（§7）。 |
+| **public** | 由 `[vmdocker].public` **目录**清单定义的可导出内容；运行时另以软链接视图呈现（§11）。 |
 
 ## 4. 关键事实与依据
 
@@ -61,36 +61,38 @@
 
 ## 5. Profile 规范
 
-### 5.1 用户可见字段
+profile 为 **TOML** 文件（`profile.toml`），用配置段区分「Dockerfile 构建配置」与「vmdocker 配置」。
 
-```json
-{
-  "base":   "openclaw",                          // 基础镜像：openclaw | hermes | ...
-  "bin":    "/app/main",                          // 程序运行 bin
-  "tools":  ["curl", "ripgrep", "jq"],            // 要安装的工具
-  "public": ["workspace/SOUL.md", "workspace/skills"], // 定义哪些目录/文件是 public（导出白名单）
-  "startup_sh": "profile/startup.sh",             // 上传的 ENTRYPOINT 脚本（包内相对路径）
-  "custom_run": ["RUN pip install --no-cache-dir foo"] // 用户特殊需求的自定义 RUN
-}
+### 5.1 用户可见配置
+
+```toml
+[dockerfile]
+base       = "openclaw"                    # 基础镜像：openclaw | hermes | claude | ...
+bin        = "bin"                          # 可执行程序目录（标准化目录，整目录 COPY 进镜像并 chmod +x）
+tools      = ["curl", "ripgrep", "jq"]      # 要安装的工具
+custom_run = ["RUN pip install --no-cache-dir foo"]  # 用户特殊需求的自定义 RUN
+entrypoint = "startup.sh"                   # 上传的 ENTRYPOINT 脚本（包内相对路径）
+
+[vmdocker]
+public = ["skills", "persona"]              # 可导出目录清单（导出白名单）。默认只支持目录
 ```
 
-### 5.2 约定注入（用户不可见，构建器强制写入）
+- **`bin` 是目录**：放可执行程序的标准化目录，整目录 `COPY` 进镜像并 `chmod +x`；`entrypoint` 脚本启动其中的程序。
+- **`public` 只放目录**：每项是**相对 HOME 的目录**路径；导出时按目录结构压成 `public.zip`，导入时**直接解压到 `/home/hymx`**，还原同样的目录结构。默认只支持目录——若要携带单文件，置于某个 public 目录内。
+- **分段语义**：`[dockerfile]` 段只喂给 Dockerfile 生成器（§6）；`[vmdocker]` 段只喂给运行时 Export/Import 与目录视图（§9/§10/§11）。两段互不串用。
 
-```json
-{
-  "_convention": {
-    "user": "hymx",                               // 固定运行用户
-    "home": "/home/hymx",                          // 唯一可访问目录
-    "workdir": "/home/hymx",
-    "profile_path": "/home/hymx/.vmdocker/profile.json", // profile 被 copy 进镜像的位置
-    "harden": ["去除 sudo/docker 组", "rm /etc/sudoers.d/*", "禁止 passwordless sudo"]
-  }
-}
+### 5.2 约定注入（用户不可见，构建器强制写入/校验）
+
+```toml
+[convention]            # 不在用户编写的文件里，由构建器强制注入并校验
+user   = "hymx"         # 固定运行用户
+home   = "/home/hymx"   # 唯一可访问目录
+harden = ["去除 sudo/docker 组", "rm /etc/sudoers.d/*", "禁止 passwordless sudo"]
 ```
 
 - **固定用户 `hymx`**：标准化 Dockerfile 以 `USER hymx`、`WORKDIR /home/hymx` 结束（替换现有模板的 `agent`/`/workspace`）。
 - **仅 HOME 可访问**：工作区、state、tmp、xdg 全部归置到 `/home/hymx` 下；配合 host 侧 `ReadonlyRootfs` + bind-mount 单目录。
-- **profile copy 进镜像**：`COPY profile.json /home/hymx/.vmdocker/profile.json`，使运行时与 Export 都能读到构建配方。
+- **profile copy 进镜像**：`COPY profile.toml /home/hymx/profile.toml`（HOME 根目录，不嵌套）。host 侧 spawn 时把它种入工作区（bind-mount 会遮蔽镜像内 HOME），使运行时与 Export 都能读到构建配方。
 
 ### 5.3 base 解析
 
@@ -106,32 +108,31 @@
 
 确定性地把 profile 渲染成多阶段 Dockerfile（以 `Dockerfile.openclaw` 为参数化蓝本）：
 
-```dockerfile
-# 1) builder 阶段：构建 vmdocker_agent 程序 bin（profile.bin 指向产物）
-FROM golang:1.25 AS builder
-... go build -o {{.Bin}} .
+仅消费 `[dockerfile]` 段，确定性渲染成多阶段 Dockerfile（以 `Dockerfile.openclaw` 为参数化蓝本）：
 
-# 2) base 阶段：按 profile.base 选择
+```dockerfile
+# 1) base 阶段：按 [dockerfile].base 选择
 FROM {{.BaseImage}}
 USER root
 WORKDIR /app
 
-# 3) 拷贝 runtime 程序 + 启动脚本 + profile
-COPY --from=builder {{.Bin}} {{.Bin}}
-COPY {{.StartupSh}} /usr/local/bin/start-vmdocker-agent.sh
-COPY profile.json /home/hymx/.vmdocker/profile.json
+# 2) 拷贝可执行程序目录（[dockerfile].bin 整目录）+ 启动脚本 + profile
+COPY {{.BinDir}}/ /usr/local/bin/
+RUN chmod +x /usr/local/bin/*
+COPY {{.Entrypoint}} /usr/local/bin/start-vmdocker-agent.sh
+COPY profile.toml /home/hymx/profile.toml
 
-# 4) 工具安装（profile.tools，按包管理器分发）
+# 3) 工具安装（[dockerfile].tools，按包管理器分发）
 RUN install {{.Tools}}
 
-# 5) 约定加固（不可见）：建 hymx 用户、去 sudo/docker 组、清 sudoers
+# 4) 约定加固（不可见）：建 hymx 用户、去 sudo/docker 组、清 sudoers
 RUN useradd hymx ...; gpasswd -d hymx sudo || true; rm -f /etc/sudoers.d/*
 
-# 6) 自定义 RUN（profile.custom_run，原样插入）
+# 5) 自定义 RUN（[dockerfile].custom_run，原样插入）
 {{range .CustomRun}}{{.}}{{end}}
 
-# 7) 收尾：权限、属主、约定环境
-RUN chown -R hymx:hymx /home/hymx /app
+# 6) 收尾：权限、属主、约定环境
+RUN chmod +x /usr/local/bin/start-vmdocker-agent.sh; chown -R hymx:hymx /home/hymx /app
 ENV HOME=/home/hymx
 ENV RUNTIME_TYPE={{.RuntimeType}}
 USER hymx
@@ -140,9 +141,10 @@ ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]
 ```
 
 要点：
-- `startup.sh` 为用户上传内容，作为 ENTRYPOINT；构建器仍校验其可执行与基本安全（不强行覆盖现有 entrypoint 契约）。
-- 加固段（5、7）由构建器无条件注入，profile 不能关闭。
+- **`bin` 为目录**：整目录 COPY 到 `/usr/local/bin/` 并 `chmod +x`；`entrypoint` 脚本作为 ENTRYPOINT，由它启动 bin 目录内程序。
+- 加固段（4、6）由构建器无条件注入，profile 不能关闭。
 - 自定义 RUN 在加固之后、收尾之前插入，避免用户 RUN 重新打开 sudo 等。
+- 构建器校验 `entrypoint` 脚本可执行与基本安全（不强行覆盖现有 entrypoint 契约）。
 
 ## 7. Module 文件格式
 
@@ -158,7 +160,7 @@ flowchart TB
     Tags["tags[]<br/>Module-Format / Module-Members / 各成员 sha256"]
     Data["data = gzip(container tar)"]
     M1["image.tar.gz<br/>docker save 镜像"]
-    M2["profile.json<br/>构建配方"]
+    M2["profile.toml<br/>构建配方"]
     M3["public.zip<br/>仅 Export 流程"]
     Mani["module.manifest.json<br/>成员清单 + sha256"]
 
@@ -186,7 +188,7 @@ flowchart TB
 | `Capability-Public` | profile.public 路径，逗号分隔，便于预览 |
 | `Created-At` | RFC3339 |
 
-### 7.3 module.manifest.json（容器 tar 内第一个条目）
+### 7.3 module.manifest.json（容器 tar 内第一个条目）！！删了这个 json
 
 ```json
 {
@@ -194,10 +196,10 @@ flowchart TB
   "created_at": "2026-06-16T12:00:00Z",
   "members": [
     { "name": "image",   "path": "image.tar.gz",  "sha256": "...", "size": 0 },
-    { "name": "profile", "path": "profile.json",   "sha256": "...", "size": 0 },
+    { "name": "profile", "path": "profile.toml",   "sha256": "...", "size": 0 },
     { "name": "public",  "path": "public.zip",     "sha256": "...", "size": 0 }
   ],
-  "public": ["workspace/SOUL.md", "workspace/skills"]
+  "public": ["skills", "persona"]
 }
 ```
 
@@ -212,7 +214,7 @@ sequenceDiagram
     participant MB as modulebuild 包
     participant D as docker
 
-    U->>CLI: 提供 profile.json
+    U->>CLI: 提供 profile.toml
     CLI->>MB: GenerateDockerfile(profile)
     MB-->>CLI: 标准化 Dockerfile
     CLI->>D: docker build
@@ -225,7 +227,7 @@ sequenceDiagram
 1. 读 profile → `GenerateDockerfile`。
 2. `docker build`（复用现有 `dockerBuild`）。
 3. `docker save | gzip` → `image.tar.gz`（复用现有 `exportImageArchive`）。
-4. 组装容器 tar：`module.manifest.json` + `image.tar.gz` + `profile.json`（无 public）。
+4. 组装容器 tar：`module.manifest.json` + `image.tar.gz` + `profile.toml`（无 public）。
 5. `SaveModule` 签名 → `mod-<id>.json`。
 
 ## 9. Export 流程（运行时，host 侧）
@@ -241,8 +243,8 @@ sequenceDiagram
     participant D as docker
 
     H->>V: Apply(Action=Export)
-    V->>FS: 读 profile.json（/home/hymx/.vmdocker 对应的工作区位置）
-    V->>FS: 按 profile.public 解引用 + 越界校验 → public.zip
+    V->>FS: 读 profile.toml（HOME 根 = bind-mount 工作区根）
+    V->>FS: 按 [vmdocker].public 目录解引用 + 越界校验 → public.zip
     V->>MB: GenerateDockerfile(profile)
     V->>D: docker build + docker save → image.tar.gz
     V->>MB: PackModule(image, profile, public.zip)
@@ -250,10 +252,10 @@ sequenceDiagram
     V-->>H: Result.Data = base64(mod bytes); Result.Output = 摘要
 ```
 
-1. 读取该实例 workspace 内的 `profile.json`（构建时已 copy 进镜像并落到工作区）。
-2. 按 `profile.public` 收集目录/文件，**解引用软链接 + 越界校验**（§12），打成 `public.zip`。
+1. 读取该实例 HOME 根的 `profile.toml`（构建时 copy 进镜像、spawn 时种入工作区）。
+2. 按 `[vmdocker].public` 收集**目录**（默认只支持目录），**解引用软链接 + 越界校验**（§12），按目录结构打成 `public.zip`（zip 内路径相对 HOME）。
 3. `GenerateDockerfile(profile)` → `docker build` → `docker save` → `image.tar.gz`（复用 §8 同一套 `modulebuild`）。
-4. 组装容器 tar：`manifest` + `image.tar.gz` + `profile.json` + `public.zip`，`Module-Members = image,profile,public`。
+4. 组装容器 tar：`manifest` + `image.tar.gz` + `profile.toml` + `public.zip`，`Module-Members = image,profile,public`。
 5. 签名 → 经 `Result.Data` 回传。
 
 > Export 重建镜像，确保导出的镜像嵌入最新 public 内容；语义为“调用时刻快照”，与现有 `Checkpoint()` host 侧归档同源。
@@ -271,30 +273,32 @@ sequenceDiagram
 
     H->>V: Apply(Action=Import, meta.Data=base64(module), Params[On-Conflict])
     V->>MB: 解析 BundleItem → 校验 Module-Format/manifest
-    MB-->>V: profile.json + public.zip
-    V->>FS: 解 public.zip 到 workspace/.import-<ts>/，逐文件 sha256 校验
-    V->>FS: 按 On-Conflict 原子落位到 workspace/
+    MB-->>V: profile.toml + public.zip
+    V->>FS: 解 public.zip 到 /home/hymx/.import-<ts>/，逐文件 sha256 校验
+    V->>FS: 按 On-Conflict 原子落位到 /home/hymx
     V-->>H: Result.Output = ImportResult
 ```
 
 1. `BundleItem` 反序列化 → `TagsToModule` 断言 `Module-Format == hymx.vmdocker.module.v0.0.1`（否则 `FORMAT_MISMATCH`）。
-2. 解容器 tar，校验 `module.manifest.json` sha256（`MANIFEST_MISMATCH`）；取 `profile.json` 与 `public.zip`（缺 public → `NO_PUBLIC`）。
+2. 解容器 tar，校验 `module.manifest.json` sha256（`MANIFEST_MISMATCH`）；取 `profile.toml` 与 `public.zip`（缺 public → `NO_PUBLIC`）。
 3. `len(public.zip) ≤ MaxBytes`（默认 64 MiB，`VMDOCKER_CAPABILITY_MAX_BYTES` 可覆盖，否则 `TOO_LARGE`）。
-4. 解到临时目录 `workspace/.import-<ts>/`：路径净化（拒绝绝对路径、`..`、zip 内 symlink），目标确认在 `workspace/` 内（`PATH_ESCAPE`）；逐文件 sha256 比对 manifest。
+4. 解到临时目录 `/home/hymx/.import-<ts>/`：路径净化（拒绝绝对路径、`..`、zip 内 symlink），目标确认在 HOME（`/home/hymx`）内（`PATH_ESCAPE`）；逐文件 sha256 比对 manifest。
 5. 冲突策略 `meta.Params["On-Conflict"]`：`skip`（默认）/ `overwrite` / `fail`。
-6. 全量校验通过 → 原子 `rename` 落位 `workspace/`。可选：用导入的 `profile.json` 更新目标 workspace 的 `.vmdocker/profile.json`（便于目标下次 Export 携带新 public 定义）。
-7. **不建软链接**；`public/` 视图由 vmdocker 下次 spawn 依 profile 重建（§9 视图）。返回 `ImportResult{imported, skipped, public, profileUpdated}`。
+6. 全量校验通过 → 原子 `rename` 落位到 `/home/hymx`（按 public 目录结构还原）。可选：用导入的 `profile.toml` 更新目标 HOME 根的 `profile.toml`（便于目标下次 Export 携带新 public 定义）。
+7. **不建软链接**；`public/` 视图由 vmdocker 下次 spawn 依 profile 重建（§11 视图）。返回 `ImportResult{imported, skipped, public, profileUpdated}`。
 
 ## 11. 目录视图（运行时，profile 驱动）
 
-`vmdocker` 在 `sandbox_workspace/<pid>/` 下维护 `public/`、`private/` 两个**软链接视图**，仅供人/agent 检视：
+`vmdocker` 在 HOME 根（`/home/hymx`，即 bind-mount 工作区根）下维护 `public/`、`private/` 两个**软链接视图**，仅供人/agent 检视：
 
 ```text
-sandbox_workspace/<pid>/
-├── workspace/                 真实文件（含 SOUL.md、skills/、data/、.vmdocker/profile.json）
-├── public/                    profile.public 驱动的相对软链接（导出白名单的可视化）
-│   ├── SOUL.md -> ../workspace/SOUL.md
-│   └── skills  -> ../workspace/skills
+/home/hymx/                    HOME 根 = bind-mount 工作区根
+├── profile.toml               构建配方（HOME 根）
+├── skills/                    真实目录（profile.public 项）
+├── persona/                   真实目录（profile.public 项）
+├── public/                    [vmdocker].public 驱动的相对软链接（导出白名单可视化，只链目录）
+│   ├── skills  -> ../skills
+│   └── persona -> ../persona
 ├── private/                   best-effort 检视视图，按 runtime 实际目录建链
 │   ├── runtime-state -> ../.openclaw   # openclaw 示例；claude→.claude、hermes 另有
 │   ├── home -> ../.home
@@ -302,10 +306,10 @@ sandbox_workspace/<pid>/
 └── .openclaw/|.claude/... .home .tmp .xdg
 ```
 
-- **public 视图由 `profile.public` 生成**（不再是硬编码 `SOUL.md`/`skills`）。
-- **白名单 ≠ 黑名单**：导出边界是 `profile.public`；其余一切默认私有、永不导出——与是哪种 runtime、是否出现在 `private/` 无关。新增 runtime 的状态目录即便未登记进 private 视图也不会泄露。
+- **public 视图由 `[vmdocker].public` 生成**，**只链目录**（与 §5.1「public 只放目录」一致）。
+- **白名单 ≠ 黑名单**：导出边界是 `[vmdocker].public`；其余一切默认私有、永不导出——与是哪种 runtime、是否出现在 `private/` 无关。新增 runtime 的状态目录即便未登记进 private 视图也不会泄露。
 - `private/` 仅 best-effort 可视化，按 `RUNTIME_TYPE` 解析 runtime 状态目录，仅对存在目标建链。
-- 文件：`vmdocker/vmdocker/runtimemanager/env.go` 新增 `ensureWorkspaceViews(workspace, profile, runtimeType)`（幂等；遇同名真实文件只 warn 不覆盖；目标不存在则跳过）。
+- 文件：`vmdocker/vmdocker/runtimemanager/env.go` 新增 `ensureWorkspaceViews(home, profile, runtimeType)`（幂等；遇同名真实文件只 warn 不覆盖；目标不存在则跳过）。
 
 ## 12. 触发与分发
 
@@ -378,6 +382,8 @@ flowchart TB
 | 构建 | 无 | profile→Dockerfile→build→pack（离线 CLI） |
 | Export | 纯 FS 打包 public | zip public + 重建镜像 → 多负载 module |
 | Import | 解包 public 覆盖 workspace | 取 module 内 public.zip+profile 覆盖 workspace（不用其镜像） |
-| public 定义 | 硬编码 `SOUL.md`/`skills` | **`profile.public` 路径清单**驱动 |
+| profile 格式 | （v2 无 profile） | **TOML，`[dockerfile]` / `[vmdocker]` 分段** |
+| bin | 单文件路径 | **目录**（整目录 COPY + chmod +x） |
+| public 定义 | 硬编码 `SOUL.md`/`skills` | **`[vmdocker].public` 目录清单**；只支持目录，解压到 `/home/hymx` |
 | 代码归属 | vmdocker（capability 包） | **host vmdocker 收拢**：modulebuild + cmd/module + capability；agent 无感知 |
 | 构建加固 | 无 | 固定 `hymx` 用户、仅 HOME、profile 入镜像、不可关闭 |
