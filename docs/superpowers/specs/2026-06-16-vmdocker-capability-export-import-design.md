@@ -29,9 +29,10 @@
 1. 给定一份 profile，离线工具生成标准化 Dockerfile、构建镜像、产出含 `image + profile` 的 module。
 2. 标准化 Dockerfile 始终注入约定加固：固定用户 `hymx`、仅 `HOME=/home/hymx` 可访问、profile 被 copy 进镜像。
 3. 向运行中 agent 发 `Action=Export`，得到含 `image + profile + public.zip` 的 module。
-4. 向另一个运行中 agent 发 `Action=Import`（module 经 `meta.Data` 传入），其 workspace 出现与来源相同的 public 内容。
-5. Export 只导出 profile.public 声明的目录；runtime 状态、凭据、HOME、用户数据一律不导出。
-6. `vmdocker_agent` 无任何改动。
+4. 发 `Action=Export, dry_run=true`，得到将打包内容的预览清单（目录/文件/大小/sha256），不触发 docker build、不产 module（§9.1）。
+5. 向另一个运行中 agent 发 `Action=Import`（module 经 `meta.Data` 传入），其 HOME 出现与来源相同的 public 目录内容。
+6. Export 只导出 `[vmdocker].public` 声明的目录；runtime 状态、凭据、HOME 其余内容、用户数据一律不导出。
+7. `vmdocker_agent` 无任何改动。
 
 ### 2.3 非目标
 
@@ -162,16 +163,14 @@ BundleItem 只有一个 `data` 字段，因此 `data = gzip(tar)`，成员名固
 ```mermaid
 flowchart TB
     BI["BundleItem (签名)"]
-    Tags["tags[]<br/>Module-Format / Module-Members / 各成员 sha256"]
+    Tags["tags[]<br/>Module-Format / Module-Members / Member-*-SHA256"]
     Data["data = gzip(container tar)"]
     M1["image.tar.gz<br/>docker save 镜像"]
     M2["profile.toml<br/>构建配方"]
     M3["public.zip<br/>仅 Export 流程"]
-    Mani["module.manifest.json<br/>成员清单 + sha256"]
 
     BI --> Tags
     BI --> Data
-    Data --> Mani
     Data --> M1
     Data --> M2
     Data --> M3
@@ -189,24 +188,13 @@ flowchart TB
 | `Module-Format` | `hymx.vmdocker.module.v0.0.1` |
 | `Module-Members` | `image,profile`（构建）/ `image,profile,public`（Export） |
 | `Image-Name` / `Image-ID` | docker 镜像名与 ID |
-| `Module-Manifest-SHA256` | `module.manifest.json` 的 sha256 |
+| `Member-Image-SHA256` | 容器 tar 内 `image.tar.gz` 的 sha256 |
+| `Member-Profile-SHA256` | `profile.toml` 的 sha256 |
+| `Member-Public-SHA256` | `public.zip` 的 sha256（仅 Export 有） |
 | `Capability-Public` | profile.public 路径，逗号分隔，便于预览 |
+
+> 成员完整性校验直接走 tags 里的 `Member-*-SHA256`，**不再单独打 `module.manifest.json`**。容器 tar 内只放成员本身（`image.tar.gz` / `profile.toml` / `public.zip`）。
 | `Created-At` | RFC3339 |
-
-### 7.3 module.manifest.json（容器 tar 内第一个条目）！！删了这个 json
-
-```json
-{
-  "format": "hymx.vmdocker.module.v0.0.1",
-  "created_at": "2026-06-16T12:00:00Z",
-  "members": [
-    { "name": "image",   "path": "image.tar.gz",  "sha256": "...", "size": 0 },
-    { "name": "profile", "path": "profile.toml",   "sha256": "...", "size": 0 },
-    { "name": "public",  "path": "public.zip",     "sha256": "...", "size": 0 }
-  ],
-  "public": ["skills", "persona"]
-}
-```
 
 ## 8. 构建 module 流程（离线工具）
 
@@ -232,7 +220,7 @@ sequenceDiagram
 1. 读 profile → `GenerateDockerfile`。
 2. `docker build`（复用现有 `dockerBuild`）。
 3. `docker save | gzip` → `image.tar.gz`（复用现有 `exportImageArchive`）。
-4. 组装容器 tar：`module.manifest.json` + `image.tar.gz` + `profile.toml`（无 public）。
+4. 组装容器 tar：`image.tar.gz` + `profile.toml`（无 public）；各成员 sha256 写入 tags。
 5. `SaveModule` 签名 → `mod-<id>.json`。
 
 ## 9. Export 流程（运行时，host 侧）
@@ -260,10 +248,46 @@ sequenceDiagram
 1. 读取该实例 HOME 根的 `profile.toml`（构建时 copy 进镜像、spawn 时种入工作区）。
 2. 按 `[vmdocker].public` **就地读取目录**（默认只支持目录），目录内若含软链接则 `resolveWithinHome` 越界校验（§14），按目录结构打成 `public.zip`（zip 内路径相对 HOME）。
 3. `GenerateDockerfile(profile)` → `docker build` → `docker save` → `image.tar.gz`（复用 §8 同一套 `modulebuild`）。
-4. 组装容器 tar：`manifest` + `image.tar.gz` + `profile.toml` + `public.zip`，`Module-Members = image,profile,public`。
+4. 组装容器 tar：`image.tar.gz` + `profile.toml` + `public.zip`，`Module-Members = image,profile,public`，各成员 sha256 写入 tags。
 5. 签名 → 经 `Result.Data` 回传。
 
 > Export 重建镜像，确保导出的镜像嵌入最新 public 内容；语义为“调用时刻快照”，与现有 `Checkpoint()` host 侧归档同源。
+
+### 9.1 导出预览（dry-run）
+
+在真正导出（含最贵的 docker build）之前，让调用方先核对"将打包哪些目录/文件"。预览只跑 Export 的**收集阶段**（上面第 1–2 步），**跳过生成 Dockerfile / build / save / pack / 签名**。
+
+**触发**：`Apply(Action=Export, meta.Params["dry_run"]="true")`——与导出同一 Action 的两个深度，命中 dry_run 即走预览分支。
+
+**返回**（`Result.Output`，不产 module、不签名、无 `Result.Data`）：
+
+```json
+{
+  "public": ["skills", "persona"],
+  "entries": [
+    { "path": "skills/code-review/SKILL.md", "size": 1234, "sha256": "..." }
+  ],
+  "total_files": 12,
+  "total_bytes": 45678,
+  "warnings": ["skills/x 指向 HOME 外的软链接，将被拒绝"]
+}
+```
+
+**实现**：把收集逻辑抽成共用函数，Export 与 Preview 复用，Preview 不往下走：
+
+```go
+// capability 包
+type PublicEntry struct{ Path string; Size int64; SHA256 string }
+type Collection struct{ Public []string; Entries []PublicEntry; TotalBytes int64; Warnings []string }
+
+// 遍历 [vmdocker].public 目录、算 sha256、resolveWithinHome 越界校验（不打 zip）
+func CollectPublic(home string, public []string) (Collection, error)
+
+func Preview(home string, public []string) (Collection, error)        // 仅收集，直接返回
+func Export(home string, profile Profile) (ExportResult, error)        // CollectPublic → zip → build → pack
+```
+
+越界软链接在预览里记入 `warnings`（不报错中断），便于用户先看清；真正 Export 时则按 §14 拒绝。预览廉价、无副作用，可随时多次调用。
 
 ## 10. Import 流程（运行时，host 侧）
 
@@ -277,17 +301,17 @@ sequenceDiagram
     participant FS as 目标 bind-mount 工作区
 
     H->>V: Apply(Action=Import, meta.Data=base64(module), Params[On-Conflict])
-    V->>MB: 解析 BundleItem → 校验 Module-Format/manifest
+    V->>MB: 解析 BundleItem → 校验 Module-Format + Member-*-SHA256
     MB-->>V: profile.toml + public.zip
-    V->>FS: 解 public.zip 到 /home/hymx/.import-<ts>/，逐文件 sha256 校验
+    V->>FS: 解 public.zip 到 /home/hymx/.import-<ts>/，逐文件校验
     V->>FS: 按 On-Conflict 原子落位到 /home/hymx
     V-->>H: Result.Output = ImportResult
 ```
 
 1. `BundleItem` 反序列化 → `TagsToModule` 断言 `Module-Format == hymx.vmdocker.module.v0.0.1`（否则 `FORMAT_MISMATCH`）。
-2. 解容器 tar，校验 `module.manifest.json` sha256（`MANIFEST_MISMATCH`）；取 `profile.toml` 与 `public.zip`（缺 public → `NO_PUBLIC`）。
+2. 解容器 tar，取 `profile.toml` 与 `public.zip`（缺 public → `NO_PUBLIC`）；按 tags 的 `Member-Profile-SHA256` / `Member-Public-SHA256` 校验成员完整性（不符 → `MEMBER_MISMATCH`）。
 3. `len(public.zip) ≤ MaxBytes`（默认 64 MiB，`VMDOCKER_CAPABILITY_MAX_BYTES` 可覆盖，否则 `TOO_LARGE`）。
-4. 解到临时目录 `/home/hymx/.import-<ts>/`：路径净化（拒绝绝对路径、`..`、zip 内 symlink），目标确认在 HOME（`/home/hymx`）内（`PATH_ESCAPE`）；逐文件 sha256 比对 manifest。
+4. 解到临时目录 `/home/hymx/.import-<ts>/`：路径净化（拒绝绝对路径、`..`、zip 内 symlink），目标确认在 HOME（`/home/hymx`）内（`PATH_ESCAPE`）。
 5. 冲突策略 `meta.Params["On-Conflict"]`：`skip`（默认）/ `overwrite` / `fail`。
 6. 全量校验通过 → 原子 `rename` 落位到 `/home/hymx`（按 public 目录结构还原）。可选：用导入的 `profile.toml` 更新目标 HOME 根的 `profile.toml`（便于目标下次 Export 携带新 public 定义）。
 7. 落位即真实目录到 HOME，**无任何视图需重建**（§11）。返回 `ImportResult{imported, skipped, public, profileUpdated}`。
@@ -318,17 +342,22 @@ sequenceDiagram
 flowchart TB
     A["vmdocker.apply(meta)"]
     S{"meta.Action"}
+    DR{"dry_run?"}
+    PV["host 侧 Preview（§9.1）"]
     E["host 侧 Export（§9）"]
     I["host 侧 Import（§10）"]
     P["透传 /vmm/apply（现状）"]
     A --> S
-    S -->|Export| E
+    S -->|Export| DR
+    DR -->|是| PV
+    DR -->|否| E
     S -->|Import| I
     S -->|其它| P
 ```
 
 - `ActionExport="Export"`、`ActionImport="Import"`（大小写不敏感）。命中即 host 侧处理，**永不发往 agent**。
-- 输入/输出：Export 无输入、`Result.Data` 出；Import `meta.Data` 入、`Result.Output` 出；错误经 `Result.Error`（错误码见 §10/§13）。
+- `Action=Export` 时再看 `meta.Params["dry_run"]`：为真走 Preview（§9.1，仅 `Result.Output`），否则走完整 Export。
+- 输入/输出：Export `Result.Data` 出、Preview 仅 `Result.Output`；Import `meta.Data` 入、`Result.Output` 出；错误经 `Result.Error`（错误码见 §13）。
 
 ## 13. 代码归属与重构（收拢到 host vmdocker）
 
@@ -336,13 +365,13 @@ flowchart TB
 |---|---|
 | `modulegen/`（docker build/save、pull、tags） | 迁入 `vmdocker/vmdocker/modulebuild/`，扩展 profile→Dockerfile 生成 + 多负载打包 |
 | `cmd/module`（离线 CLI） | 迁入 `vmdocker/cmd/module`，消费 `modulebuild` |
-| —（无） | 新增 `vmdocker/vmdocker/capability/`：public.zip 打包/解包、Import 落位 |
-| —（无） | `vmdocker.apply()` 加 Export/Import Action 分发 |
+| —（无） | 新增 `vmdocker/vmdocker/capability/`：`CollectPublic` / `Preview` / public.zip 打包/解包、Import 落位 |
+| —（无） | `vmdocker.apply()` 加 Export(含 dry_run Preview)/Import Action 分发 |
 | —（无） | env.go **无新增**：不维护软链接视图（public=profile 真相、private=HOME） |
 
 `vmdocker_agent` 侧：**无改动**；它仍只是被构建进镜像、提供 `/vmm/*` 运行时服务的程序。`vmdocker_agent/modulegen` 与 `cmd/module` 在迁移完成后废弃。
 
-> 错误码：`FORMAT_MISMATCH` / `TOO_LARGE` / `MANIFEST_MISMATCH` / `PATH_ESCAPE` / `NO_PUBLIC` / `CONFLICT`，统一经 `Result.Error` 回传。
+> 错误码：`FORMAT_MISMATCH` / `TOO_LARGE` / `MEMBER_MISMATCH` / `PATH_ESCAPE` / `NO_PUBLIC` / `CONFLICT`，统一经 `Result.Error` 回传。
 
 ## 14. 安全与边界
 
@@ -351,24 +380,23 @@ flowchart TB
 - **路径穿越**：public 目录内软链接、zip 解包目标都过 `resolveWithinHome`；拒绝绝对路径软链接、`../` 越界、归档内 symlink 条目。
 - **大小限制**：Import `MaxBytes`（默认 64 MiB，可覆盖），防 zip-bomb。
 - **原子性**：Import 先写临时目录、全量 sha256 校验通过后再 rename；任一步失败整体回滚。
-- **导出签名**：临时密钥自签（沙箱/host 无需预置密钥；配置 `VMDOCKER_MODULE_SIGNER_KEY` 则用之）；导入端不强校验签名，只校验 `Module-Format` + manifest sha256。
+- **导出签名**：临时密钥自签（沙箱/host 无需预置密钥；配置 `VMDOCKER_MODULE_SIGNER_KEY` 则用之）；导入端不强校验签名，只校验 `Module-Format` + 各 `Member-*-SHA256`。
 - **镜像可信**：Import 不执行 module 内镜像（只取 public/profile），规避导入未知镜像的执行风险；用 module 镜像直接 run 出新 agent 走现有 module-spawn 信任链。
 
 ## 15. 测试
 
 - `vmdocker/vmdocker/modulebuild/dockerfile_test.go`：profile→Dockerfile 渲染（各 `FROM` 别名、`bin` 目录 COPY+chmod、`tools` 展开、`RUN` 逐条补前缀、`ENTRYPOINT`、加固段强制注入、profile copy）。
-- `vmdocker/vmdocker/modulebuild/module_test.go`：容器 tar 成员与 manifest sha256；构建态 `image,profile`、导出态 `image,profile,public`；tags 正确。
-- `vmdocker/vmdocker/capability/capability_test.go`：public.zip 收集只含 `profile.public`；越界软链接被拒；private 不进包；Import skip/overwrite/fail；`TOO_LARGE`/`FORMAT_MISMATCH`/`MANIFEST_MISMATCH`/`PATH_ESCAPE`/`NO_PUBLIC`；round-trip 字节一致。
-- （env.go 无视图逻辑，故无 view 相关测试）
-- `vmdocker/vmdocker/vmdocker_test.go`：`Apply(Action=Export)` 产合法 module 于 `Result.Data` 且不触达 `/vmm/apply`；`Apply(Action=Import)` 正确覆盖；其它 Action 仍透传（回归）。
+- `vmdocker/vmdocker/modulebuild/module_test.go`：容器 tar 成员与 tags 里 `Member-*-SHA256` 一致；构建态 `image,profile`、导出态 `image,profile,public`；无 `module.manifest.json`；tags 正确。
+- `vmdocker/vmdocker/capability/capability_test.go`：`CollectPublic` 只含 `[vmdocker].public`、sha256 正确；`Preview` 不产 module、越界软链接进 `warnings`；public.zip 越界软链接在 Export 时被拒；private 不进包；Import skip/overwrite/fail；`TOO_LARGE`/`FORMAT_MISMATCH`/`MEMBER_MISMATCH`/`PATH_ESCAPE`/`NO_PUBLIC`；round-trip 字节一致。
+- `vmdocker/vmdocker/vmdocker_test.go`：`Apply(Action=Export)` 产合法 module 于 `Result.Data`；`Apply(Action=Export, dry_run)` 仅返回 Preview 于 `Result.Output`、不产 module；二者都不触达 `/vmm/apply`；`Apply(Action=Import)` 正确覆盖；其它 Action 仍透传（回归）。
 - `vmdocker/cmd/module`：端到端离线构建产物可被 spawn。
 
 ## 16. 实施顺序
 
 1. host：`modulebuild` 包——迁移现有 `modulegen` + 新增 `GenerateDockerfile(profile)` + 多负载 `PackModule` + 单测。
 2. host：`cmd/module` 迁移为消费 `modulebuild` 的离线 CLI（构建 module 流程）+ 端到端。
-3. host：`capability` 包——public.zip 打包/解包/Import 落位 + 单测（含 round-trip）。
-4. host：`vmdocker.apply()` Export/Import Action 分发（§12）+ 测试。
+3. host：`capability` 包——`CollectPublic`/`Preview` + public.zip 打包/解包/Import 落位 + 单测（含 round-trip）。
+4. host：`vmdocker.apply()` Export(含 dry_run Preview)/Import Action 分发（§12）+ 测试。
 5. 端到端：构建 module → spawn 出 agent A → Export → 对 agent B Import → 复刻验证。
 
 > 注：无目录视图工作项——public 以 profile 为唯一真相，private = HOME（§11）。
@@ -378,7 +406,8 @@ flowchart TB
 | 项 | v2 | **v3（本版）** |
 |---|---|---|
 | 核心抽象 | 约定路径 + capability.tar.gz | **Profile 驱动**的标准化 Dockerfile + 统一 Module |
-| Module 内容 | public.tar.gz + manifest | **image + profile（+ Export 时 public.zip）** 容器 tar |
+| Module 内容 | public.tar.gz + manifest | **image + profile（+ Export 时 public.zip）** 容器 tar；成员 sha256 入 tags，**无 module.manifest.json** |
+| 导出预览 | 无 | **`Apply(Action=Export, dry_run)`** 仅收集清单、跳过 build（§9.1） |
 | 构建 | 无 | profile→Dockerfile→build→pack（离线 CLI） |
 | Export | 纯 FS 打包 public | zip public + 重建镜像 → 多负载 module |
 | Import | 解包 public 覆盖 workspace | 取 module 内 public.zip+profile 覆盖 workspace（不用其镜像） |
