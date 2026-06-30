@@ -65,19 +65,24 @@ profile 为 **TOML** 文件（`profile.toml`），用配置段区分「Dockerfil
 
 ### 5.1 用户可见配置
 
+`[dockerfile]` 段的 key **直接采用 Dockerfile 指令名**（即所写即所生成），便于理解：
+
 ```toml
 [dockerfile]
-base       = "openclaw"                    # 基础镜像：openclaw | hermes | claude | ...
-bin        = "bin"                          # 可执行程序目录（标准化目录，整目录 COPY 进镜像并 chmod +x）
-tools      = ["curl", "ripgrep", "jq"]      # 要安装的工具
-custom_run = ["RUN pip install --no-cache-dir foo"]  # 用户特殊需求的自定义 RUN
-entrypoint = "startup.sh"                   # 上传的 ENTRYPOINT 脚本（包内相对路径）
+FROM       = "openclaw"                     # 基础镜像别名：openclaw | hermes | claude（解析见 §5.3）
+bin        = "bin"                          # 便捷键：可执行程序目录（整目录 COPY + chmod +x，标准化到 /usr/local/bin）
+tools      = ["curl", "ripgrep", "jq"]      # 便捷键：要安装的工具（展开为跨发行版 RUN 安装）
+RUN        = ["pip install --no-cache-dir foo"]  # 自定义 RUN（值不含 RUN 前缀，生成器逐条加 RUN）
+ENTRYPOINT = "startup.sh"                   # 上传的 ENTRYPOINT 脚本（包内相对路径）
 
 [vmdocker]
 public = ["skills", "persona"]              # 可导出目录清单（导出白名单）。默认只支持目录
 ```
 
-- **`bin` 是目录**：放可执行程序的标准化目录，整目录 `COPY` 进镜像并 `chmod +x`；`entrypoint` 脚本启动其中的程序。
+- **两类 key**：
+  - **指令键（大写，= 字面 Dockerfile 指令）**：`FROM`、`RUN`、`ENTRYPOINT`，值即该指令的参数（不含指令前缀）。
+  - **便捷键（小写，vmdocker 展开为指令）**：`bin`（→ `COPY` + `chmod +x`）、`tools`（→ 跨发行版安装 `RUN`），因含标准化/加固处理而单列。
+- **`bin` 是目录**：放可执行程序的标准化目录，整目录 `COPY` 进镜像、`chmod +x`、标准化到 `/usr/local/bin`；`ENTRYPOINT` 脚本启动其中的程序。
 - **`public` 只放目录**：每项是**相对 HOME 的目录**路径；导出时按目录结构压成 `public.zip`，导入时**直接解压到 `/home/hymx`**，还原同样的目录结构。默认只支持目录——若要携带单文件，置于某个 public 目录内。
 - **分段语义**：`[dockerfile]` 段只喂给 Dockerfile 生成器（§6）；`[vmdocker]` 段只喂给运行时 Export/Import 与目录视图（§9/§10/§11）。两段互不串用。
 
@@ -94,11 +99,11 @@ harden = ["去除 sudo/docker 组", "rm /etc/sudoers.d/*", "禁止 passwordless 
 - **仅 HOME 可访问**：工作区、state、tmp、xdg 全部归置到 `/home/hymx` 下；配合 host 侧 `ReadonlyRootfs` + bind-mount 单目录。
 - **profile copy 进镜像**：`COPY profile.toml /home/hymx/profile.toml`（HOME 根目录，不嵌套）。host 侧 spawn 时把它种入工作区（bind-mount 会遮蔽镜像内 HOME），使运行时与 Export 都能读到构建配方。
 
-### 5.3 base 解析
+### 5.3 FROM 解析
 
-`base` 映射到一组基础镜像 + runtime 装配（以现有 Dockerfile 为蓝本）：
+`FROM` 取**别名**（非任意镜像），映射到一组基础镜像 + runtime 装配（以现有 Dockerfile 为蓝本）：
 
-| base | 基础镜像 / 装配 | RUNTIME_TYPE |
+| FROM | 基础镜像 / 装配 | RUNTIME_TYPE |
 |---|---|---|
 | `openclaw` | `ghcr.io/openclaw/openclaw` + `docker/sandbox-templates:shell` | `openclaw` |
 | `hermes` | hermes 基础镜像（待补） | `hermes` |
@@ -106,30 +111,29 @@ harden = ["去除 sudo/docker 组", "rm /etc/sudoers.d/*", "禁止 passwordless 
 
 ## 6. 标准化 Dockerfile 生成
 
-确定性地把 profile 渲染成多阶段 Dockerfile（以 `Dockerfile.openclaw` 为参数化蓝本）：
-
-仅消费 `[dockerfile]` 段，确定性渲染成多阶段 Dockerfile（以 `Dockerfile.openclaw` 为参数化蓝本）：
+仅消费 `[dockerfile]` 段，确定性渲染成多阶段 Dockerfile（以 `Dockerfile.openclaw` 为参数化蓝本）。指令键原样映射到 Dockerfile 指令；便捷键 `bin`/`tools` 由生成器展开：
 
 ```dockerfile
-# 1) base 阶段：按 [dockerfile].base 选择
-FROM {{.BaseImage}}
+# 1) base 阶段：[dockerfile].FROM 别名 → 实际基础镜像（§5.3）
+FROM {{.ResolvedFROM}}
 USER root
 WORKDIR /app
 
-# 2) 拷贝可执行程序目录（[dockerfile].bin 整目录）+ 启动脚本 + profile
-COPY {{.BinDir}}/ /usr/local/bin/
+# 2) bin 目录整目录 COPY + chmod；启动脚本；profile
+COPY {{.Bin}}/ /usr/local/bin/
 RUN chmod +x /usr/local/bin/*
-COPY {{.Entrypoint}} /usr/local/bin/start-vmdocker-agent.sh
+COPY {{.ENTRYPOINT}} /usr/local/bin/start-vmdocker-agent.sh
 COPY profile.toml /home/hymx/profile.toml
 
-# 3) 工具安装（[dockerfile].tools，按包管理器分发）
+# 3) tools 便捷键 → 跨发行版安装
 RUN install {{.Tools}}
 
 # 4) 约定加固（不可见）：建 hymx 用户、去 sudo/docker 组、清 sudoers
 RUN useradd hymx ...; gpasswd -d hymx sudo || true; rm -f /etc/sudoers.d/*
 
-# 5) 自定义 RUN（[dockerfile].custom_run，原样插入）
-{{range .CustomRun}}{{.}}{{end}}
+# 5) [dockerfile].RUN 逐条加 RUN 前缀（值本身不含前缀）
+{{range .RUN}}RUN {{.}}
+{{end}}
 
 # 6) 收尾：权限、属主、约定环境
 RUN chmod +x /usr/local/bin/start-vmdocker-agent.sh; chown -R hymx:hymx /home/hymx /app
@@ -141,10 +145,11 @@ ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]
 ```
 
 要点：
-- **`bin` 为目录**：整目录 COPY 到 `/usr/local/bin/` 并 `chmod +x`；`entrypoint` 脚本作为 ENTRYPOINT，由它启动 bin 目录内程序。
+- **指令键即所写即所生成**：`RUN`/`ENTRYPOINT`/`FROM` 与 Dockerfile 同名；`RUN` 值不含 `RUN ` 前缀，生成器逐条补。
+- **`bin` 为目录**：整目录 COPY 到 `/usr/local/bin/` 并 `chmod +x`；`ENTRYPOINT` 脚本启动 bin 目录内程序。
 - 加固段（4、6）由构建器无条件注入，profile 不能关闭。
-- 自定义 RUN 在加固之后、收尾之前插入，避免用户 RUN 重新打开 sudo 等。
-- 构建器校验 `entrypoint` 脚本可执行与基本安全（不强行覆盖现有 entrypoint 契约）。
+- 用户 `RUN`（段 5）在加固之后、收尾之前插入，避免重新打开 sudo 等。
+- 构建器校验 `ENTRYPOINT` 脚本可执行与基本安全（不强行覆盖现有 entrypoint 契约）。
 
 ## 7. Module 文件格式
 
@@ -357,7 +362,7 @@ flowchart TB
 
 ## 15. 测试
 
-- `vmdocker/vmdocker/modulebuild/dockerfile_test.go`：profile→Dockerfile 渲染（各 base、tools、custom_run、加固段强制注入、startup/profile copy）。
+- `vmdocker/vmdocker/modulebuild/dockerfile_test.go`：profile→Dockerfile 渲染（各 `FROM` 别名、`bin` 目录 COPY+chmod、`tools` 展开、`RUN` 逐条补前缀、`ENTRYPOINT`、加固段强制注入、profile copy）。
 - `vmdocker/vmdocker/modulebuild/module_test.go`：容器 tar 成员与 manifest sha256；构建态 `image,profile`、导出态 `image,profile,public`；tags 正确。
 - `vmdocker/vmdocker/capability/capability_test.go`：public.zip 收集只含 `profile.public`；越界软链接被拒；private 不进包；Import skip/overwrite/fail；`TOO_LARGE`/`FORMAT_MISMATCH`/`MANIFEST_MISMATCH`/`PATH_ESCAPE`/`NO_PUBLIC`；round-trip 字节一致。
 - `vmdocker/vmdocker/runtimemanager/env_test.go`：profile 驱动 public 视图；private best-effort；幂等；不覆盖真实文件；越界目标被拒。
