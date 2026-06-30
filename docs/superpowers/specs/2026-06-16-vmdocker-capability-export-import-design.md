@@ -3,7 +3,7 @@
 - 日期：2026-06-16
 - 状态：已评审（v3，profile 驱动），待实现
 - 涉及仓库：
-  - `vmdocker`：host 侧编排、docker 生命周期、**profile→Dockerfile→build→module 全套构建逻辑（收拢于此）**、离线构建 CLI、运行时 Export/Import、目录视图
+  - `vmdocker`：host 侧编排、docker 生命周期、**profile→Dockerfile→build→module 全套构建逻辑（收拢于此）**、离线构建 CLI、运行时 Export/Import
   - `vmdocker_agent`：容器内运行时服务，**对本功能无感知**（仅作为被构建进镜像的程序）
 
 ## 1. 一句话说明
@@ -46,7 +46,7 @@
 | **Profile** | 一份声明式 JSON，描述如何标准化构建一个 agent 镜像（§5）。是 module 的一等成员。 |
 | **标准化 Dockerfile** | 由 profile 确定性生成的 Dockerfile，叠加用户不可见的约定加固（§6）。 |
 | **Module** | 统一载体：一个签名 BundleItem，其 `data` 是一个容器 tar，成员为 `image.tar.gz` + `profile.toml`（+ Export 时 `public.zip`）（§7）。 |
-| **public** | 由 `[vmdocker].public` **目录**清单定义的可导出内容；运行时另以软链接视图呈现（§11）。 |
+| **public** | 由 `[vmdocker].public` **目录**清单定义的可导出内容；profile 即唯一真相，无软链接视图（§11）。 |
 
 ## 4. 关键事实与依据
 
@@ -55,7 +55,7 @@
 | host 已持有 docker 构建/保存能力 | `vmdocker_agent/modulegen/modulegen.go`（`dockerBuild`/`exportImageArchive`） | profile→build→save 逻辑可直接迁入 host vmdocker |
 | host 已管理 docker 生命周期 | `vmdocker/vmdocker/runtimemanager/docker.go`（`DockerManager`） | 运行时 Export 在 host 侧 build 镜像有原生支撑 |
 | sandbox 工作区 bind-mount 进容器，host 可直读写 | `runtimemanager/docker.go:303-304` | Export/Import 可在 host 侧直接读写 public/profile，agent 无感知 |
-| 两仓互不 import | `vmdocker/go.mod`、`vmdocker_agent/go.mod` | 共享构建逻辑需明确归属——**决策：收拢于 host vmdocker**（§11） |
+| 两仓互不 import | `vmdocker/go.mod`、`vmdocker_agent/go.mod` | 共享构建逻辑需明确归属——**决策：收拢于 host vmdocker**（§13） |
 | 现有 Dockerfile 模板与加固 | `Dockerfile.openclaw` / `Dockerfile.claude` | 标准化 Dockerfile 以其为蓝本参数化（§6） |
 | `Vm` 接口固定为 Apply/Checkpoint/Restore/Close | `hymx/vmm/schema/schema.go:33` | 运行时 Export/Import 只能挂在 `Apply` + `Action`（§10） |
 
@@ -84,7 +84,7 @@ public = ["skills", "persona"]              # 可导出目录清单（导出白�
   - **便捷键（小写，vmdocker 展开为指令）**：`bin`（→ `COPY` + `chmod +x`）、`tools`（→ 跨发行版安装 `RUN`），因含标准化/加固处理而单列。
 - **`bin` 是目录**：放可执行程序的标准化目录，整目录 `COPY` 进镜像、`chmod +x`、标准化到 `/usr/local/bin`；`ENTRYPOINT` 脚本启动其中的程序。
 - **`public` 只放目录**：每项是**相对 HOME 的目录**路径；导出时按目录结构压成 `public.zip`，导入时**直接解压到 `/home/hymx`**，还原同样的目录结构。默认只支持目录——若要携带单文件，置于某个 public 目录内。
-- **分段语义**：`[dockerfile]` 段只喂给 Dockerfile 生成器（§6）；`[vmdocker]` 段只喂给运行时 Export/Import 与目录视图（§9/§10/§11）。两段互不串用。
+- **分段语义**：`[dockerfile]` 段只喂给 Dockerfile 生成器（§6）；`[vmdocker]` 段只喂给运行时 Export/Import（§9/§10）。两段互不串用。
 
 ### 5.2 约定注入（用户不可见，构建器强制写入/校验）
 
@@ -249,7 +249,7 @@ sequenceDiagram
 
     H->>V: Apply(Action=Export)
     V->>FS: 读 profile.toml（HOME 根 = bind-mount 工作区根）
-    V->>FS: 按 [vmdocker].public 目录解引用 + 越界校验 → public.zip
+    V->>FS: 就地读 [vmdocker].public 目录 + 越界校验 → public.zip
     V->>MB: GenerateDockerfile(profile)
     V->>D: docker build + docker save → image.tar.gz
     V->>MB: PackModule(image, profile, public.zip)
@@ -258,7 +258,7 @@ sequenceDiagram
 ```
 
 1. 读取该实例 HOME 根的 `profile.toml`（构建时 copy 进镜像、spawn 时种入工作区）。
-2. 按 `[vmdocker].public` 收集**目录**（默认只支持目录），**解引用软链接 + 越界校验**（§12），按目录结构打成 `public.zip`（zip 内路径相对 HOME）。
+2. 按 `[vmdocker].public` **就地读取目录**（默认只支持目录），目录内若含软链接则 `resolveWithinHome` 越界校验（§14），按目录结构打成 `public.zip`（zip 内路径相对 HOME）。
 3. `GenerateDockerfile(profile)` → `docker build` → `docker save` → `image.tar.gz`（复用 §8 同一套 `modulebuild`）。
 4. 组装容器 tar：`manifest` + `image.tar.gz` + `profile.toml` + `public.zip`，`Module-Members = image,profile,public`。
 5. 签名 → 经 `Result.Data` 回传。
@@ -290,31 +290,25 @@ sequenceDiagram
 4. 解到临时目录 `/home/hymx/.import-<ts>/`：路径净化（拒绝绝对路径、`..`、zip 内 symlink），目标确认在 HOME（`/home/hymx`）内（`PATH_ESCAPE`）；逐文件 sha256 比对 manifest。
 5. 冲突策略 `meta.Params["On-Conflict"]`：`skip`（默认）/ `overwrite` / `fail`。
 6. 全量校验通过 → 原子 `rename` 落位到 `/home/hymx`（按 public 目录结构还原）。可选：用导入的 `profile.toml` 更新目标 HOME 根的 `profile.toml`（便于目标下次 Export 携带新 public 定义）。
-7. **不建软链接**；`public/` 视图由 vmdocker 下次 spawn 依 profile 重建（§11 视图）。返回 `ImportResult{imported, skipped, public, profileUpdated}`。
+7. 落位即真实目录到 HOME，**无任何视图需重建**（§11）。返回 `ImportResult{imported, skipped, public, profileUpdated}`。
 
-## 11. 目录视图（运行时，profile 驱动）
+## 11. public / private 语义（无软链接视图）
 
-`vmdocker` 在 HOME 根（`/home/hymx`，即 bind-mount 工作区根）下维护 `public/`、`private/` 两个**软链接视图**，仅供人/agent 检视：
+**不维护 `public/`、`private/` 软链接目录。** profile 的 `[vmdocker].public` 即唯一真相，没有需要同步的视图。
 
 ```text
-/home/hymx/                    HOME 根 = bind-mount 工作区根
-├── profile.toml               构建配方（HOME 根）
-├── skills/                    真实目录（profile.public 项）
-├── persona/                   真实目录（profile.public 项）
-├── public/                    [vmdocker].public 驱动的相对软链接（导出白名单可视化，只链目录）
-│   ├── skills  -> ../skills
-│   └── persona -> ../persona
-├── private/                   best-effort 检视视图，按 runtime 实际目录建链
-│   ├── runtime-state -> ../.openclaw   # openclaw 示例；claude→.claude、hermes 另有
-│   ├── home -> ../.home
-│   └── xdg  -> ../.xdg
-└── .openclaw/|.claude/... .home .tmp .xdg
+/home/hymx/                    HOME 根 = bind-mount 工作区根（agent 的全部私有空间）
+├── profile.toml               构建配方
+├── skills/                    [vmdocker].public 项（就地真实目录）
+├── persona/                   [vmdocker].public 项（就地真实目录）
+└── .openclaw/|.claude/... .home .tmp .xdg .data   其余皆私有
 ```
 
-- **public 视图由 `[vmdocker].public` 生成**，**只链目录**（与 §5.1「public 只放目录」一致）。
-- **白名单 ≠ 黑名单**：导出边界是 `[vmdocker].public`；其余一切默认私有、永不导出——与是哪种 runtime、是否出现在 `private/` 无关。新增 runtime 的状态目录即便未登记进 private 视图也不会泄露。
-- `private/` 仅 best-effort 可视化，按 `RUNTIME_TYPE` 解析 runtime 状态目录，仅对存在目标建链。
-- 文件：`vmdocker/vmdocker/runtimemanager/env.go` 新增 `ensureWorkspaceViews(home, profile, runtimeType)`（幂等；遇同名真实文件只 warn 不覆盖；目标不存在则跳过）。
+- **public = `[vmdocker].public` 目录清单**：export 就地读这些目录打 zip，**不搬动原文件**、不建任何视图。
+- **private = HOME 本身**：HOME 内**除 `[vmdocker].public` 之外的一切**默认私有、永不导出。private 不是一个目录、不需枚举、不需维护。
+- **白名单 ≠ 黑名单**：导出边界是 `[vmdocker].public` 这个白名单。与是哪种 runtime、HOME 里有什么状态目录无关——新增 runtime 的状态目录天然落在"非 public"里，不会泄露。
+- 原"`ensureWorkspaceViews` 维护软链接"的逻辑**取消**，`env.go` 无新增视图代码。
+- 唯一保留的相关安全约束：打 zip 时 public 目录**内部**若含软链接，须 `resolveWithinHome` 校验、拒绝指向 HOME 外的链接（§14 路径穿越）。
 
 ## 12. 触发与分发
 
@@ -344,7 +338,7 @@ flowchart TB
 | `cmd/module`（离线 CLI） | 迁入 `vmdocker/cmd/module`，消费 `modulebuild` |
 | —（无） | 新增 `vmdocker/vmdocker/capability/`：public.zip 打包/解包、Import 落位 |
 | —（无） | `vmdocker.apply()` 加 Export/Import Action 分发 |
-| —（无） | `runtimemanager/env.go` 加 profile 驱动的目录视图 |
+| —（无） | env.go **无新增**：不维护软链接视图（public=profile 真相、private=HOME） |
 
 `vmdocker_agent` 侧：**无改动**；它仍只是被构建进镜像、提供 `/vmm/*` 运行时服务的程序。`vmdocker_agent/modulegen` 与 `cmd/module` 在迁移完成后废弃。
 
@@ -353,8 +347,8 @@ flowchart TB
 ## 14. 安全与边界
 
 - **构建加固不可关闭**：固定 `hymx` 用户、去 sudo/docker 组、清 sudoers、仅 HOME 可访问；自定义 RUN 在加固之后插入。
-- **白名单边界**：导出只读 `profile.public`，其余默认私有、永不导出（§11）。
-- **路径穿越**：public 收集与 zip 解包都过 `resolveWithinWorkspace`；拒绝绝对路径软链接、`../` 越界、归档内 symlink 条目。
+- **白名单边界**：导出只读 `[vmdocker].public`，其余默认私有、永不导出（§11）；无视图、无黑名单需维护。
+- **路径穿越**：public 目录内软链接、zip 解包目标都过 `resolveWithinHome`；拒绝绝对路径软链接、`../` 越界、归档内 symlink 条目。
 - **大小限制**：Import `MaxBytes`（默认 64 MiB，可覆盖），防 zip-bomb。
 - **原子性**：Import 先写临时目录、全量 sha256 校验通过后再 rename；任一步失败整体回滚。
 - **导出签名**：临时密钥自签（沙箱/host 无需预置密钥；配置 `VMDOCKER_MODULE_SIGNER_KEY` 则用之）；导入端不强校验签名，只校验 `Module-Format` + manifest sha256。
@@ -365,7 +359,7 @@ flowchart TB
 - `vmdocker/vmdocker/modulebuild/dockerfile_test.go`：profile→Dockerfile 渲染（各 `FROM` 别名、`bin` 目录 COPY+chmod、`tools` 展开、`RUN` 逐条补前缀、`ENTRYPOINT`、加固段强制注入、profile copy）。
 - `vmdocker/vmdocker/modulebuild/module_test.go`：容器 tar 成员与 manifest sha256；构建态 `image,profile`、导出态 `image,profile,public`；tags 正确。
 - `vmdocker/vmdocker/capability/capability_test.go`：public.zip 收集只含 `profile.public`；越界软链接被拒；private 不进包；Import skip/overwrite/fail；`TOO_LARGE`/`FORMAT_MISMATCH`/`MANIFEST_MISMATCH`/`PATH_ESCAPE`/`NO_PUBLIC`；round-trip 字节一致。
-- `vmdocker/vmdocker/runtimemanager/env_test.go`：profile 驱动 public 视图；private best-effort；幂等；不覆盖真实文件；越界目标被拒。
+- （env.go 无视图逻辑，故无 view 相关测试）
 - `vmdocker/vmdocker/vmdocker_test.go`：`Apply(Action=Export)` 产合法 module 于 `Result.Data` 且不触达 `/vmm/apply`；`Apply(Action=Import)` 正确覆盖；其它 Action 仍透传（回归）。
 - `vmdocker/cmd/module`：端到端离线构建产物可被 spawn。
 
@@ -374,9 +368,10 @@ flowchart TB
 1. host：`modulebuild` 包——迁移现有 `modulegen` + 新增 `GenerateDockerfile(profile)` + 多负载 `PackModule` + 单测。
 2. host：`cmd/module` 迁移为消费 `modulebuild` 的离线 CLI（构建 module 流程）+ 端到端。
 3. host：`capability` 包——public.zip 打包/解包/Import 落位 + 单测（含 round-trip）。
-4. host：`runtimemanager/env.go` profile 驱动目录视图 + 单测。
-5. host：`vmdocker.apply()` Export/Import Action 分发（§12）+ 测试。
-6. 端到端：构建 module → spawn 出 agent A → Export → 对 agent B Import → 复刻验证。
+4. host：`vmdocker.apply()` Export/Import Action 分发（§12）+ 测试。
+5. 端到端：构建 module → spawn 出 agent A → Export → 对 agent B Import → 复刻验证。
+
+> 注：无目录视图工作项——public 以 profile 为唯一真相，private = HOME（§11）。
 
 ## 17. 版本变更摘要
 
@@ -390,5 +385,6 @@ flowchart TB
 | profile 格式 | （v2 无 profile） | **TOML，`[dockerfile]` / `[vmdocker]` 分段** |
 | bin | 单文件路径 | **目录**（整目录 COPY + chmod +x） |
 | public 定义 | 硬编码 `SOUL.md`/`skills` | **`[vmdocker].public` 目录清单**；只支持目录，解压到 `/home/hymx` |
+| public/private 视图 | 软链接视图 + `ensureWorkspaceViews` | **取消**：public=profile 唯一真相，private=HOME，无视图、无 env.go 新增 |
 | 代码归属 | vmdocker（capability 包） | **host vmdocker 收拢**：modulebuild + cmd/module + capability；agent 无感知 |
 | 构建加固 | 无 | 固定 `hymx` 用户、仅 HOME、profile 入镜像、不可关闭 |
