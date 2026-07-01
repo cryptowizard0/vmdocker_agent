@@ -40,6 +40,7 @@
 - 不做 Arweave 实际上链；本期只生成本地 module 文件。
 - 不做 public 之外的细粒度权限或内容加密。
 - profile 的**编辑/上传界面**（前端/控制台）不在本 spec；本 spec 只定义 profile schema 与消费它的构建/导出/导入流程。
+- **不做常驻用户服务的监督**（supervisor / `[vmdocker].services`）。用户 bin 支持"agent 按需调用"与"startup 一次性 setup"（§6 要点）；常驻/守护式服务本期不做。
 
 ## 3. 核心概念
 
@@ -204,7 +205,10 @@ ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]
 - **ENTRYPOINT 归平台，adapter 一定起来（finding P1）**：容器 `ENTRYPOINT` 恒为平台注入的 `start-vmdocker-agent.sh` wrapper——它做安全审计、bootstrap、**隔离执行用户 `startup` 钩子（§6.1）**，**最后 `exec /usr/local/bin/vmdocker-agent`**。用户脚本只是钩子，**无法接管 ENTRYPOINT、无法阻塞 adapter 启动**。注意：仅"降级为 hook"不够——必须按 §6.1 隔离执行，否则 hook 前台长跑/exit/exec 仍会卡死启动。
 - **平台注入适配器（B2）**：段 2 无条件注入 adapter binary + wrapper（按 `FROM`/`RUNTIME_TYPE`），不占用 profile。
 - **指令键即所写即所生成**：`RUN`/`FROM` 与 Dockerfile 同名；`RUN` 值不含 `RUN ` 前缀，生成器逐条补。（`startup` 不是 `ENTRYPOINT` 指令，见上。）
-- **`bin` 为用户目录**：只放**用户自己的**可执行文件；由用户 `startup` 钩子按需调起。
+- **`bin` 为用户目录、落在 PATH**：整目录 COPY 到 `/usr/local/bin/`（在默认 PATH 上），因此用户可执行文件可被直接按名调用。两种运行方式：
+  - **A. agent 按需调用（主路径）**：运行中的 agent 通过其 shell 工具直接 `mybin ...`——这是"运行 bin 里可执行程序"的主要方式，无需额外声明。
+  - **B. 启动时一次性 setup**：在用户 `startup` 钩子（§6.1，隔离/超时/非致命）里调 `mybin`。
+  - **范围外**：把某个 bin 当**常驻受管服务**（守护/重启）不在本期——`startup` 钩子只能 `mybin &` 自行后台化、无监督。若将来需要，走 supervisor + `[vmdocker].services` 声明（本期不做）。
 - 加固段（5、7）由构建器无条件注入，profile 不能关闭。用户 `RUN`（段 6）在加固之后插入。
 - 构建器校验用户 `startup` 钩子可执行与基本安全。
 
