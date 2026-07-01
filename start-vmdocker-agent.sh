@@ -3,6 +3,8 @@ set -eu
 
 APP_ROOT="${VMDOCKER_AGENT_APP_ROOT:-/app}"
 BOOTSTRAP_DIR="${VMDOCKER_AGENT_BOOTSTRAP_DIR:-/usr/local/lib/vmdocker-agent/bootstrap}"
+USER_STARTUP_HOOK="${VMDOCKER_USER_STARTUP_HOOK:-${USER_STARTUP_HOOK:-/usr/local/lib/vmdocker-agent/user-startup.sh}}"
+STARTUP_HOOK_TIMEOUT="${VMDOCKER_STARTUP_HOOK_TIMEOUT:-${STARTUP_HOOK_TIMEOUT:-30}}"
 BACKGROUND_PIDS=""
 
 entry_info() {
@@ -178,17 +180,57 @@ run_bootstrap_hook() {
     unset BOOTSTRAP_RUNTIME || true
 }
 
-if [ ! -x "${APP_ROOT}/main" ]; then
-    entry_fail "${APP_ROOT}/main is missing or not executable"
+# run_user_startup_hook runs the untrusted user startup hook in isolation:
+# child process only, timeout-bounded, and failure-non-fatal.
+run_user_startup_hook() {
+    hook="${USER_STARTUP_HOOK}"
+    if [ ! -f "${hook}" ]; then
+        entry_info "no user startup hook at ${hook}"
+        return 0
+    fi
+    chmod +x "${hook}" 2>/dev/null || true
+    entry_info "running user startup hook in isolation (timeout=${STARTUP_HOOK_TIMEOUT}s): ${hook}"
+
+    set +e
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "${STARTUP_HOOK_TIMEOUT}" sh "${hook}" </dev/null >&2 2>&1
+        rc=$?
+    else
+        sh "${hook}" </dev/null >&2 2>&1 &
+        hook_pid=$!
+        ( sleep "${STARTUP_HOOK_TIMEOUT}"; kill "${hook_pid}" 2>/dev/null ) &
+        watchdog=$!
+        wait "${hook_pid}" 2>/dev/null
+        rc=$?
+        kill "${watchdog}" 2>/dev/null || true
+    fi
+    set -e
+
+    if [ "${rc}" -ne 0 ]; then
+        entry_info "user startup hook exited ${rc} (timeout/failure ignored, continuing to adapter)"
+    fi
+    return 0
+}
+
+launch_runtime() {
+    ADAPTER_BIN="${VMDOCKER_ADAPTER_BIN:-${APP_ROOT}/main}"
+    if [ ! -x "${ADAPTER_BIN}" ]; then
+        entry_fail "adapter binary ${ADAPTER_BIN} is missing or not executable"
+    fi
+
+    runtime_type="${RUNTIME_TYPE:-openclaw}"
+    if ! validate_runtime_type "${runtime_type}"; then
+        entry_fail "unsupported runtime type: ${runtime_type}"
+    fi
+    entry_info "runtime type selected: ${runtime_type}"
+    run_security_audit
+    run_bootstrap_hook "${runtime_type}"
+    run_user_startup_hook
+    exec "${ADAPTER_BIN}"
+}
+
+if [ "${VMDOCKER_WRAPPER_LIB:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
 fi
 
-runtime_type="${RUNTIME_TYPE:-openclaw}"
-if ! validate_runtime_type "${runtime_type}"; then
-    entry_fail "unsupported runtime type: ${runtime_type}"
-fi
-
-entry_info "runtime type selected: ${runtime_type}"
-run_security_audit
-run_bootstrap_hook "${runtime_type}"
-
-exec "${APP_ROOT}/main"
+launch_runtime
