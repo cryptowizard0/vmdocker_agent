@@ -89,6 +89,24 @@
 5. Export/Import/Preview：vmdocker.Apply(Action) host 侧拦截，产/收 module，全程不碰 agent
 ```
 
+### 4.2 运行时 workspace 契约迁移（决策 M：固定 HOME=/home/hymx）
+
+现状与目标不一致，需**显式迁移**运行时 workspace 契约（不是本 spec 顺带假设，而是一项要落到 `env.go`/`docker.go`/checkpoint 的改造）：
+
+| 项 | 现状 | 目标（M） | 代码位置 |
+|---|---|---|---|
+| bind-mount | `Source:<workspace> Target:<workspace>`（同路径进出） | `Source:<host workspace> Target:/home/hymx` | `runtimemanager/docker.go:302` |
+| `HOME` | `<workspace>/.home` | `/home/hymx` | `runtimemanager/env.go:95` |
+| `VMDOCKER_RUNTIME_WORKSPACE` 等 | `<workspace>` 及 `.home/.tmp/.xdg` 派生 | 全部 re-root 到 `/home/hymx` 下（`/home/hymx/.tmp`、`/home/hymx/.xdg` …） | `env.go` `appendRuntimePersistenceEnv` |
+| `OPENCLAW_*`/`XDG_*` | workspace 相对 | `/home/hymx` 相对 | `env.go` |
+| checkpoint/restore | 归档/交换 `<workspace>` 目录 | 归档/交换 `/home/hymx`（容器视角）对应的 host 目录 | `env.go` `promoteRuntimeWorkspace` 等 |
+
+- **收益**：profile 的 `USER hymx` / `HOME=/home/hymx` 在运行时**真实生效**；export/import/public 路径全部固定、可预测。
+- **代价与注意**：
+  - **丢失 Docker Sandbox "同路径进出" 属性**（`readme.md` 依赖它）。本迁移主要面向 **Docker backend**；**Docker Sandbox backend** 的挂载由平台控制、强制同路径，需么令其 host 侧工作目录即 `/home/hymx`，么该 backend 保留自有契约——**此点列为实现阶段专项**。
+  - 改动触及 spawn/checkpoint/restore，属**运行时契约破坏性变更**，需回归现有 checkpoint/restore 测试。
+- 本 spec 其余章节的 `/home/hymx` 均以此迁移为前提。
+
 ## 5. Profile 规范
 
 profile 为 **TOML** 文件（`profile.toml`），用配置段区分「Dockerfile 构建配置」与「vmdocker 配置」。
@@ -356,7 +374,7 @@ sequenceDiagram
 1. `BundleItem` 反序列化 → `TagsToModule` 断言 `Module-Format == hymx.vmdocker.module.v0.0.1`（否则 `FORMAT_MISMATCH`）。
 2. 解容器 tar（读 tar 条目即得成员，无需 `Module-Members`），取 `profile.toml` 与 `public.zip`（缺 public → `NO_PUBLIC`）；gzip/tar/zip 解码失败即视为损坏 → `CORRUPT`。
 3. `len(public.zip) ≤ MaxBytes`（默认 64 MiB，`VMDOCKER_CAPABILITY_MAX_BYTES` 可覆盖，否则 `TOO_LARGE`）。
-4. 解到临时目录 `<HOME>/.import-<ts>/`（`<HOME>` 待 §4.2 契约确定，见下）：路径净化（拒绝绝对路径、`..`、zip 内 symlink），目标确认在 HOME 内（`PATH_ESCAPE`）。
+4. 解到临时目录 `/home/hymx/.import-<ts>/`（HOME 契约见 §4.2 迁移）：路径净化（拒绝绝对路径、`..`、zip 内 symlink），目标确认在 HOME 内（`PATH_ESCAPE`）。
 5. **授权校验（§14.1）**：每个条目的落位路径必须落在**目标 agent 自己 `[vmdocker].public` 声明的 public 根**内，否则 `UNAUTHORIZED_PATH`——即便模块声称某路径 public，也不能写到目标未开放的地方（尤其私有区）；`overwrite` 需目标 owner 级权限，否则 `UNAUTHORIZED`。
 6. 冲突策略 `meta.Params["On-Conflict"]`：`skip`（默认）/ `overwrite` / `fail`，**逐路径合并**。
 7. **落位语义（非全局原子）**：public 覆盖是**逐路径合并**进既有 HOME（HOME 还含私有内容，**不能**整目录 swap，否则抹掉私有数据）。因此采用**逐文件 rename**（单文件替换原子），整个 Import **不保证全局原子**；失败时按已记录的改动清单**尽力回滚**。如需"单个 public 根原子"，可对每个 public 根做 staged 子目录 swap（可选增强）。
@@ -419,6 +437,7 @@ flowchart TB
 | `main.go`+`server/`+`runtime/`（`/vmm` 适配器） | **不迁移、不 import**；保持独立仓，编译成 adapter binary 供 vmdocker 按 `FROM` 注入 |
 | `utils.RuntimeSpecFromTags` 只认 `hymx.vmdocker.v0.0.1` | 扩为接受新 `hymx.vmdocker.module.v0.0.1`（§7.3） |
 | `dockerLoadArchive` 直接把 data 当 docker-save 流 | 按 `Module-Format` 分支：新格式先从容器 tar 取 `image.tar.gz` 再 `docker image load`（§7.3） |
+| `env.go`/`docker.go` workspace 契约（HOME=`.home`、同路径 bind-mount） | **迁移到固定 `/home/hymx`**：mount Target、HOME、`OPENCLAW_*`/`VMDOCKER_*`/`XDG_*` re-root、checkpoint/restore 跟改（§4.2） |
 
 `vmdocker_agent` 侧：**无源码改动**；它编译出的 `/vmm` 适配器 binary 是 vmdocker 构建的一个输入制品。`vmdocker_agent/modulegen` 与 `cmd/module` 在迁移完成后废弃（其能力已在 vmdocker 侧重建）。
 
@@ -459,6 +478,7 @@ gzip/zip 解码只防损坏、不防篡改——任意调用方可造一个格�
 1. host：`modulebuild` 包——迁移现有 `modulegen` + 新增 `GenerateDockerfile(profile)`（含 B2 注入 adapter binary）+ `FROM`/`RUNTIME_TYPE`→adapter binary 的供给方式 + 多负载 `PackModule` + 单测。
 2. host：`cmd/module` 迁移为消费 `modulebuild` 的离线 CLI（构建 module 流程）+ 端到端。
 2b. host：改造 spawn/load 链——`RuntimeSpecFromTags` 接受新格式、`dockerLoadArchive` 按格式分支取 `image.tar.gz`（§7.3）+ 新旧格式加载测试。
+2c. host：运行时 workspace 契约迁移到固定 `/home/hymx`（§4.2）——`docker.go` mount Target、`env.go` HOME/`OPENCLAW_*`/`VMDOCKER_*`/`XDG_*` re-root、checkpoint/restore 跟改；**回归现有 checkpoint/restore 测试**；Docker Sandbox backend 专项处理。
 3. host：`capability` 包——`CollectPublic`/`Preview` + public.zip 打包/解包/Import 落位 + 单测（含 round-trip）。
 4. host：`vmdocker.apply()` Export(含 dry_run Preview)/Import Action 分发（§12）+ 测试。
 5. 端到端：构建 module → spawn 出 agent A → Export → 对 agent B Import → 复刻验证。
@@ -481,4 +501,7 @@ gzip/zip 解码只防损坏、不防篡改——任意调用方可造一个格�
 | public/private 视图 | 软链接视图 + `ensureWorkspaceViews` | **取消**：public=profile 唯一真相，private=HOME，无视图、无 env.go 新增 |
 | 代码归属 | vmdocker（capability 包） | **host vmdocker 收拢**：modulebuild + cmd/module + capability；agent 无感知 |
 | 工程边界 | 未明确 | **B+B2**：vmdocker 自包含（不含 agent 源码）；agent 适配器为预编译 binary，按 `FROM` 平台注入（§4.1/§6/§13） |
+| 运行时 HOME 契约 | `<workspace>/.home`、动态同路径 mount | **迁移 M**：固定 `HOME=/home/hymx`、mount Target=/home/hymx、env re-root、checkpoint 跟改（§4.2） |
+| module 加载兼容 | 只认 `hymx.vmdocker.v0.0.1` | 新格式改 `RuntimeSpecFromTags`+`dockerLoadArchive`，旧格式兼容（§7.3） |
+| Import 授权 | 未定义 | 写入锁定目标 public 白名单、overwrite 需 owner、可选验签（§14.1） |
 | 构建加固 | 无 | 固定 `hymx` 用户、仅 HOME、profile 入镜像、不可关闭 |
