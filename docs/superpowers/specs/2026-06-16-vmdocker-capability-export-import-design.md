@@ -517,7 +517,7 @@ gzip/zip 解码只防损坏、不防篡改——任意调用方可造一个格�
 | 项 | v2 | **v3（本版）** |
 |---|---|---|
 | 核心抽象 | 约定路径 + capability.tar.gz | **Profile 驱动**的标准化 Dockerfile + 统一 Module |
-| Module 内容 | public.tar.gz + manifest | **image + profile（+ Export 时 public.zip）** 容器 tar；成员由 tar 条目枚举，**无 manifest、无 Module-Members、无 per-member sha**（完整性靠 gzip+签名） |
+| Module 内容 | public.tar.gz + manifest | **image + profile（+ Export 时 public.zip）** 容器 tar；成员由 tar 条目枚举，**无 manifest、无 Module-Members、无 per-member sha**（损坏靠解码；防篡改需显式验签，**默认不验**） |
 | 导出预览 | 无 | **`Apply(Action=Export, dry_run)`** 仅收集清单、跳过 build（§9.1） |
 | 构建 | 无 | profile→Dockerfile→build→pack（离线 CLI） |
 | Export | 纯 FS 打包 public | zip public + 重建镜像 → 多负载 module |
