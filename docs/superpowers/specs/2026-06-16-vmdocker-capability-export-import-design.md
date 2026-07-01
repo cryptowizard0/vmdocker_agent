@@ -84,7 +84,7 @@
 0. [带外·偶尔发版] vmdocker_agent 编译 → 平台 agent 适配器 binary（按 runtime 各一份或单 binary 多分派）
 1. 备好 profile.toml（[dockerfile] FROM/bin/tools/RUN/startup + [vmdocker] public）；bin/ 仅放用户程序
 2. vmdocker cmd/module：profile→标准化 Dockerfile（注入平台 adapter binary + wrapper + COPY 用户 bin/、startup 钩子）→docker build→save→pack → module(image+profile)
-3. vmdocker spawn 容器：平台 wrapper（ENTRYPOINT）审计→bootstrap→调用用户 startup 钩子→`exec` adapter → /vmm 就绪
+3. vmdocker spawn 容器：平台 wrapper（ENTRYPOINT）审计→bootstrap→**隔离执行**用户 startup 钩子（子进程/超时/非致命，§6.1）→**总是** `exec` adapter → /vmm 就绪
 4. hymx→vmdocker.Apply→普通消息透传 agent；agent 驱动引擎
 5. Export/Import/Preview：vmdocker.Apply(Action) host 侧拦截，产/收 module，全程不碰 agent
 ```
@@ -130,7 +130,7 @@ public = ["skills", "persona"]              # 可导出目录清单（导出白�
 - **两类 key**：
   - **指令键（大写，= 字面 Dockerfile 指令）**：`FROM`、`RUN`，值即该指令的参数（不含指令前缀）。
   - **便捷键（小写，vmdocker 展开为指令）**：`bin`（→ `COPY` + `chmod +x`）、`tools`（→ 跨发行版安装 `RUN`）、`startup`（用户启动钩子），因含标准化/加固/调度处理而单列。
-- **`startup` 是用户启动钩子，不是容器 ENTRYPOINT**：容器真正的 `ENTRYPOINT` 是**平台注入的 wrapper**（`start-vmdocker-agent.sh`），由它负责安全审计、bootstrap、调用用户 `startup` 钩子，**最后 `exec` 平台 adapter binary**（保证 `/vmm` 一定起得来）。用户脚本**不能**接管 ENTRYPOINT——否则可能永不启动 adapter、`/vmm` health 永不 ready（详见 §6 与 finding）。
+- **`startup` 是用户启动钩子，不是容器 ENTRYPOINT**：容器真正的 `ENTRYPOINT` 是**平台注入的 wrapper**（`start-vmdocker-agent.sh`），它审计、bootstrap、**隔离执行**用户 `startup` 钩子（独立子进程 + 超时 + 失败非致命，§6.1），**最后总是 `exec` 平台 adapter binary**。用户钩子**不能接管 ENTRYPOINT、也不能阻塞 adapter 启动**——即便钩子前台长跑/exit/exec，wrapper 仍到达 adapter，`/vmm` 必 ready。
 - **`bin` 是目录**：放可执行程序的标准化目录，整目录 `COPY` 进镜像、`chmod +x`、标准化到 `/usr/local/bin`；由用户 `startup` 钩子或 adapter 按需调起其中程序。
 - **`public` 只放目录**：每项是**相对 HOME 的目录**路径；导出时按目录结构压成 `public.zip`，导入时**直接解压到 `/home/hymx`**，还原同样的目录结构。默认只支持目录——若要携带单文件，置于某个 public 目录内。
 - **分段语义**：`[dockerfile]` 段只喂给 Dockerfile 生成器（§6）；`[vmdocker]` 段只喂给运行时 Export/Import（§9/§10）。两段互不串用。
@@ -201,7 +201,7 @@ ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]
 ```
 
 要点：
-- **ENTRYPOINT 归平台，adapter 一定起来（finding P1）**：容器 `ENTRYPOINT` 恒为平台注入的 `start-vmdocker-agent.sh` wrapper——它做安全审计、bootstrap、**调用用户 `startup` 钩子**，**最后 `exec /usr/local/bin/vmdocker-agent`**。用户脚本只是钩子，**无法接管 ENTRYPOINT**，因此不会出现"用户脚本只启动自己 bin、`/vmm` 永不 ready"。沿用现有 `start-vmdocker-agent.sh`（末尾 `exec ${APP_ROOT}/main`，`start-vmdocker-agent.sh:191`）的模式，适配器路径统一为 `/usr/local/bin/vmdocker-agent`。
+- **ENTRYPOINT 归平台，adapter 一定起来（finding P1）**：容器 `ENTRYPOINT` 恒为平台注入的 `start-vmdocker-agent.sh` wrapper——它做安全审计、bootstrap、**隔离执行用户 `startup` 钩子（§6.1）**，**最后 `exec /usr/local/bin/vmdocker-agent`**。用户脚本只是钩子，**无法接管 ENTRYPOINT、无法阻塞 adapter 启动**。注意：仅"降级为 hook"不够——必须按 §6.1 隔离执行，否则 hook 前台长跑/exit/exec 仍会卡死启动。
 - **平台注入适配器（B2）**：段 2 无条件注入 adapter binary + wrapper（按 `FROM`/`RUNTIME_TYPE`），不占用 profile。
 - **指令键即所写即所生成**：`RUN`/`FROM` 与 Dockerfile 同名；`RUN` 值不含 `RUN ` 前缀，生成器逐条补。（`startup` 不是 `ENTRYPOINT` 指令，见上。）
 - **`bin` 为用户目录**：只放**用户自己的**可执行文件；由用户 `startup` 钩子按需调起。
@@ -209,6 +209,22 @@ ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]
 - 构建器校验用户 `startup` 钩子可执行与基本安全。
 
 **平台 adapter binary 来源**：vmdocker 从一份按 `FROM`/`RUNTIME_TYPE` 索引的**预编译产物**取用（如内置/发布制品或已知路径），版本随 vmdocker 平台管理；`vmdocker_agent` 仓负责产出该 binary，二者以 binary + `/vmm` 协议解耦（§4.1）。
+
+### 6.1 用户 startup 钩子的隔离执行契约（finding P1，硬性）
+
+只把用户脚本"降级为 hook"不足以保证 `/vmm` 起来——若 wrapper 仍以"前台顺序跑 hook → 再 exec adapter"的方式，一个**前台长跑 / `exit` / `exec` 用户 binary** 的 hook 仍会让 wrapper 到不了 adapter。现有 wrapper 恰是危险模式：它 **`source`** bootstrap 钩子（`start-vmdocker-agent.sh:176`）后才 `exec` adapter（`:194`）。用户 hook 必须**隔离执行**，语义写死：
+
+| 约束 | 要求 | 目的 |
+|---|---|---|
+| **不 `source`** | 以**独立子进程**运行（`sh <hook>` / 直接执行脚本文件），绝不 `.`/`source` | hook 不能改写/替换 wrapper 环境 |
+| **不能替换 wrapper** | hook 内 `exec` 只替换**子进程**，wrapper 不受影响 | 防 hook 接管 PID |
+| **超时有界** | `timeout ${VMDOCKER_STARTUP_HOOK_TIMEOUT:-30s}` 包裹；超时杀子进程 | 前台长跑 hook 不能挂死启动 |
+| **失败非致命** | 非零退出 / 超时 → `log.Warn` 继续，不 abort | hook 出错不拖垮 adapter |
+| **wrapper 必达 adapter** | 无论 hook 结果如何，wrapper **总是** `exec /usr/local/bin/vmdocker-agent` | adapter 启动的强保证 |
+
+- **长跑 sidecar**：若用户确需常驻服务，hook 应**自行后台化**（`cmd &` 后快速返回）；`timeout` 只约束前台段。
+- **与平台 bootstrap 钩子区分**：平台 bootstrap 钩子（`bootstrap/<runtime>.sh`，可信）可维持现状；**用户 startup 钩子（不可信）走上表隔离路径**。
+- 该语义是对现有 wrapper 的**改造点**，属平台注入制品（§13）。
 
 ## 7. Module 文件格式
 
@@ -440,7 +456,7 @@ flowchart TB
 | —（无） | `vmdocker.apply()` 加 Export(含 dry_run Preview)/Import Action 分发 |
 | —（无） | env.go **无新增**：不维护软链接视图（public=profile 真相、private=HOME） |
 | `main.go`+`server/`+`runtime/`（`/vmm` 适配器） | **不迁移、不 import**；保持独立仓，编译成 adapter binary 供 vmdocker 按 `FROM` 注入 |
-| `start-vmdocker-agent.sh`（平台 ENTRYPOINT wrapper） | 作为**平台注入制品**（随 adapter 一起）；需**新增"调用用户 `startup` 钩子"步骤**，末尾仍 `exec` adapter（finding P1；现状 `start-vmdocker-agent.sh:191`） |
+| `start-vmdocker-agent.sh`（平台 ENTRYPOINT wrapper） | 作为**平台注入制品**（随 adapter 一起）；**隔离执行**用户 `startup` 钩子（不 source、子进程、超时、失败非致命），末尾**总是** `exec` adapter（finding P1，语义见 §6.1；现状为 `source` 钩子 `:176` 后 exec `:194`，属危险模式需改） |
 | `utils.RuntimeSpecFromTags` 只认 `hymx.vmdocker.v0.0.1` | 扩为接受新 `hymx.vmdocker.module.v0.0.1`（§7.3） |
 | `dockerLoadArchive` 直接把 data 当 docker-save 流 | 按 `Module-Format` 分支：新格式先从容器 tar 取 `image.tar.gz` 再 `docker image load`（§7.3） |
 | `env.go`/`docker.go` workspace 契约（HOME=`.home`、同路径 bind-mount） | **迁移到固定 `/home/hymx`**：mount Target、HOME、`OPENCLAW_*`/`VMDOCKER_*`/`XDG_*` re-root、checkpoint/restore 跟改（§4.2） |
@@ -477,6 +493,7 @@ gzip/zip 解码只防损坏、不防篡改——任意调用方可造一个格�
 - `vmdocker/vmdocker/modulebuild/module_test.go`：容器 tar 条目正确（构建 `image,profile`、导出 `image,profile,public`）；无 `Module-Members`/per-member sha/`module.manifest.json`；`Image-ID`、可选 `Member-Image-SHA256`、`Module-Format` 等 tags 正确。
 - `vmdocker/vmdocker/capability/capability_test.go`：`CollectPublic` 只含 `[vmdocker].public`、sha256 正确；`Preview` 不产 module、越界软链接进 `warnings`；public.zip 越界软链接在 Export 时被拒；private 不进包；Import skip/overwrite/fail；`TOO_LARGE`/`FORMAT_MISMATCH`/`CORRUPT`/`PATH_ESCAPE`/`NO_PUBLIC`；round-trip 字节一致。
 - `vmdocker/vmdocker/vmdocker_test.go`：`Apply(Action=Export)` 产合法 module 于 `Result.Data`；`Apply(Action=Export, dry_run)` 仅返回 Preview 于 `Result.Output`、不产 module；二者都不触达 `/vmm/apply`；`Apply(Action=Import)` 正确覆盖；其它 Action 仍透传（回归）。
+- **wrapper 隔离执行（§6.1，finding P1）**：三种恶意/异常用户 `startup` 钩子——① 前台永久 block、② 非零 `exit`、③ `exec` 用户 binary——在每种下 wrapper 仍**到达 adapter、`/vmm` health 变 ready**；超时可配、失败非致命、钩子不改写 wrapper 环境。
 - `vmdocker/cmd/module`：端到端离线构建产物可被 spawn。
 
 ## 16. 实施顺序
@@ -510,6 +527,6 @@ gzip/zip 解码只防损坏、不防篡改——任意调用方可造一个格�
 | 运行时 HOME 契约 | `<workspace>/.home`、动态同路径 mount | **迁移 M**：固定 `HOME=/home/hymx`、mount Target=/home/hymx、env re-root、checkpoint 跟改（§4.2） |
 | module 加载兼容 | 只认 `hymx.vmdocker.v0.0.1` | 新格式改 `RuntimeSpecFromTags`+`dockerLoadArchive`，旧格式兼容（§7.3） |
 | Import 授权 | 未定义 | 写入锁定目标 public 白名单、overwrite 需 owner、可选验签（§14.1） |
-| ENTRYPOINT / startup | profile 上传脚本即 ENTRYPOINT | **平台 wrapper 恒为 ENTRYPOINT**，profile `startup` 降为用户钩子，wrapper 末尾 `exec` adapter，保证 `/vmm` ready（finding P1） |
+| ENTRYPOINT / startup | profile 上传脚本即 ENTRYPOINT | **平台 wrapper 恒为 ENTRYPOINT**；profile `startup` 降为**隔离执行**的用户钩子（不 source/子进程/超时/非致命，§6.1）；wrapper **总是** `exec` adapter，钩子 block/exit/exec 都不能挡（finding P1） |
 | module 完整性表述 | "靠 gzip + DataItem 签名" | **损坏靠解码；防篡改需显式验签，默认不验**（§7.2/§14.1，finding P2） |
 | 构建加固 | 无 | 固定 `hymx` 用户、仅 HOME、profile 入镜像、不可关闭 |
