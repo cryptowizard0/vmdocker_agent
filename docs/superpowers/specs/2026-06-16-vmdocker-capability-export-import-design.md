@@ -3,8 +3,9 @@
 - 日期：2026-06-16
 - 状态：已评审（v3，profile 驱动），待实现
 - 涉及仓库：
-  - `vmdocker`：host 侧编排、docker 生命周期、**profile→Dockerfile→build→module 全套构建逻辑（收拢于此）**、离线构建 CLI、运行时 Export/Import
-  - `vmdocker_agent`：容器内运行时服务，**对本功能无感知**（仅作为被构建进镜像的程序）
+  - `vmdocker`：**本功能的唯一实现工程**——host 侧编排、docker 生命周期、profile→Dockerfile→build→module 全套构建、离线构建 CLI、运行时 Export/Import/Preview
+  - `vmdocker_agent`：容器内 `/vmm` 运行时适配器，**独立编译成一个可执行文件**；由 vmdocker 构建时按 `FROM`/`RUNTIME_TYPE` 自动注入镜像（**B2 平台注入**）。是**预编译 binary 产物**，非 vmdocker 的源码依赖；对本功能无感知
+- 架构选择：**B + B2**——vmdocker 工程自包含（不含 agent 源码），agent 适配器以 binary + `/vmm` 协议松耦合、由平台注入（详见 §4.1）
 
 ## 1. 一句话说明
 
@@ -32,7 +33,7 @@
 4. 发 `Action=Export, dry_run=true`，得到将打包内容的预览清单（目录/文件/大小/sha256），不触发 docker build、不产 module（§9.1）。
 5. 向另一个运行中 agent 发 `Action=Import`（module 经 `meta.Data` 传入），其 HOME 出现与来源相同的 public 目录内容。
 6. Export 只导出 `[vmdocker].public` 声明的目录；runtime 状态、凭据、HOME 其余内容、用户数据一律不导出。
-7. `vmdocker_agent` 无任何改动。
+7. `vmdocker_agent` 无任何源码改动；作为预编译 binary 由 vmdocker 构建时注入镜像（§4.1、§6）。
 
 ### 2.3 非目标
 
@@ -48,6 +49,7 @@
 | **标准化 Dockerfile** | 由 profile 确定性生成的 Dockerfile，叠加用户不可见的约定加固（§6）。 |
 | **Module** | 统一载体：一个签名 BundleItem，其 `data` 是一个容器 tar，成员为 `image.tar.gz` + `profile.toml`（+ Export 时 `public.zip`）（§7）。 |
 | **public** | 由 `[vmdocker].public` **目录**清单定义的可导出内容；profile 即唯一真相，无软链接视图（§11）。 |
+| **agent 适配器** | 容器内提供 `/vmm/*`、按 `RUNTIME_TYPE` 驱动 openclaw/claude/hermes 引擎的可执行文件（当前即 `vmdocker_agent` 编译产物）。由 vmdocker 构建时按 `FROM` 平台注入（§4.1）。 |
 
 ## 4. 关键事实与依据
 
@@ -59,6 +61,33 @@
 | 两仓互不 import | `vmdocker/go.mod`、`vmdocker_agent/go.mod` | 共享构建逻辑需明确归属——**决策：收拢于 host vmdocker**（§13） |
 | 现有 Dockerfile 模板与加固 | `Dockerfile.openclaw` / `Dockerfile.claude` | 标准化 Dockerfile 以其为蓝本参数化（§6） |
 | `Vm` 接口固定为 Apply/Checkpoint/Restore/Close | `hymx/vmm/schema/schema.go:33` | 运行时 Export/Import 只能挂在 `Apply` + `Action`（§10） |
+| agent 是 `/vmm` 适配器（`main.go`→`server.New(8080)`，`runtime/` 按 `RUNTIME_TYPE` 分派） | `vmdocker_agent/main.go`、`server/api.go`、`runtime/` | 一个 binary 通吃所有 base；作为预编译产物注入即可，无需源码耦合 |
+
+### 4.1 职责分工、位置与工作流（架构 B + B2）
+
+**职责与运行时位置**（构建期/运行期）：
+
+| | `vmdocker`（host 进程） | `vmdocker_agent`（容器内适配器 binary） |
+|---|---|---|
+| 构建期 | profile→Dockerfile→docker build→save→pack module→签名；**按 `FROM` 把平台 agent 适配器 binary 注入镜像** | 不参与（其 binary 被注入） |
+| 运行期·编排 | 容器生命周期、workspace bind-mount、env、对上说 VMM、对下调 `/vmm/*` | 提供 `/vmm/*`(8080)，按 `RUNTIME_TYPE` 驱动引擎 |
+| 运行期·普通消息 | `Apply` 透传 `/vmm/apply` | 处理 spawn/apply/checkpoint/restore |
+| Export/Import/Preview | `Apply(Action)` **host 侧拦截处理** | **永不触达**（无感知） |
+
+**耦合面**：vmdocker 与 agent 仅通过 **① 一个预编译 binary ② `/vmm` HTTP 协议** 松耦合，各自独立发版。vmdocker 工程不含 agent 源码。
+
+**镜像内适配器来源（B2 平台注入）**：`profile.bin` 只承载**用户自己的可执行文件**；agent 适配器 binary 由 vmdocker 构建按 `FROM`/`RUNTIME_TYPE` 自动注入（版本随平台管理），用户不需在 profile 里管它。
+
+**端到端工作流顺序**：
+
+```
+0. [带外·偶尔发版] vmdocker_agent 编译 → 平台 agent 适配器 binary（按 runtime 各一份或单 binary 多分派）
+1. 备好 profile.toml（[dockerfile] FROM/bin/tools/RUN/ENTRYPOINT + [vmdocker] public）；bin/ 仅放用户程序
+2. vmdocker cmd/module：profile→标准化 Dockerfile（注入平台 adapter binary + COPY 用户 bin/）→docker build→save→pack → module(image+profile)
+3. vmdocker spawn 容器：ENTRYPOINT 启动适配器 → /vmm 就绪
+4. hymx→vmdocker.Apply→普通消息透传 agent；agent 驱动引擎
+5. Export/Import/Preview：vmdocker.Apply(Action) host 侧拦截，产/收 module，全程不碰 agent
+```
 
 ## 5. Profile 规范
 
@@ -120,23 +149,26 @@ FROM {{.ResolvedFROM}}
 USER root
 WORKDIR /app
 
-# 2) bin 目录整目录 COPY + chmod；启动脚本；profile
+# 2) 平台注入 agent /vmm 适配器 binary（B2，按 FROM/RUNTIME_TYPE 选）
+COPY {{.PlatformAgentBin}} /usr/local/bin/vmdocker-agent
+
+# 3) 用户 bin 目录整目录 COPY + chmod；启动脚本；profile
 COPY {{.Bin}}/ /usr/local/bin/
 RUN chmod +x /usr/local/bin/*
 COPY {{.ENTRYPOINT}} /usr/local/bin/start-vmdocker-agent.sh
 COPY profile.toml /home/hymx/profile.toml
 
-# 3) tools 便捷键 → 跨发行版安装
+# 4) tools 便捷键 → 跨发行版安装
 RUN install {{.Tools}}
 
-# 4) 约定加固（不可见）：建 hymx 用户、去 sudo/docker 组、清 sudoers
+# 5) 约定加固（不可见）：建 hymx 用户、去 sudo/docker 组、清 sudoers
 RUN useradd hymx ...; gpasswd -d hymx sudo || true; rm -f /etc/sudoers.d/*
 
-# 5) [dockerfile].RUN 逐条加 RUN 前缀（值本身不含前缀）
+# 6) [dockerfile].RUN 逐条加 RUN 前缀（值本身不含前缀）
 {{range .RUN}}RUN {{.}}
 {{end}}
 
-# 6) 收尾：权限、属主、约定环境
+# 7) 收尾：权限、属主、约定环境
 RUN chmod +x /usr/local/bin/start-vmdocker-agent.sh; chown -R hymx:hymx /home/hymx /app
 ENV HOME=/home/hymx
 ENV RUNTIME_TYPE={{.RuntimeType}}
@@ -146,11 +178,14 @@ ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]
 ```
 
 要点：
+- **平台注入适配器（B2）**：段 2 由 vmdocker 构建**无条件注入**平台维护的 agent `/vmm` 适配器 binary（按 `FROM`/`RUNTIME_TYPE` 选择，来源见下）。不占用 profile，用户无需管。
 - **指令键即所写即所生成**：`RUN`/`ENTRYPOINT`/`FROM` 与 Dockerfile 同名；`RUN` 值不含 `RUN ` 前缀，生成器逐条补。
-- **`bin` 为目录**：整目录 COPY 到 `/usr/local/bin/` 并 `chmod +x`；`ENTRYPOINT` 脚本启动 bin 目录内程序。
-- 加固段（4、6）由构建器无条件注入，profile 不能关闭。
-- 用户 `RUN`（段 5）在加固之后、收尾之前插入，避免重新打开 sudo 等。
+- **`bin` 为用户目录**：只放**用户自己的**可执行文件，整目录 COPY 到 `/usr/local/bin/` 并 `chmod +x`；`ENTRYPOINT` 脚本启动所需程序（适配器已在 `/usr/local/bin/vmdocker-agent`）。
+- 加固段（5、7）由构建器无条件注入，profile 不能关闭。
+- 用户 `RUN`（段 6）在加固之后、收尾之前插入，避免重新打开 sudo 等。
 - 构建器校验 `ENTRYPOINT` 脚本可执行与基本安全（不强行覆盖现有 entrypoint 契约）。
+
+**平台 adapter binary 来源**：vmdocker 从一份按 `FROM`/`RUNTIME_TYPE` 索引的**预编译产物**取用（如内置/发布制品或已知路径），版本随 vmdocker 平台管理；`vmdocker_agent` 仓负责产出该 binary，二者以 binary + `/vmm` 协议解耦（§4.1）。
 
 ## 7. Module 文件格式
 
@@ -359,17 +394,22 @@ flowchart TB
 - `Action=Export` 时再看 `meta.Params["dry_run"]`：为真走 Preview（§9.1，仅 `Result.Output`），否则走完整 Export。
 - 输入/输出：Export `Result.Data` 出、Preview 仅 `Result.Output`；Import `meta.Data` 入、`Result.Output` 出；错误经 `Result.Error`（错误码见 §13）。
 
-## 13. 代码归属与重构（收拢到 host vmdocker）
+## 13. 代码归属与重构（B + B2：vmdocker 工程自包含）
+
+本功能全部落在 `vmdocker`；`vmdocker_agent` 作为**预编译 adapter binary** 由构建注入，非源码依赖（§4.1）。
 
 | 现状（vmdocker_agent） | 目标（vmdocker） |
 |---|---|
-| `modulegen/`（docker build/save、pull、tags） | 迁入 `vmdocker/vmdocker/modulebuild/`，扩展 profile→Dockerfile 生成 + 多负载打包 |
+| `modulegen/`（docker build/save、pull、tags） | 迁入 `vmdocker/vmdocker/modulebuild/`，扩展 profile→Dockerfile 生成（含 B2 注入 adapter）+ 多负载打包 |
 | `cmd/module`（离线 CLI） | 迁入 `vmdocker/cmd/module`，消费 `modulebuild` |
 | —（无） | 新增 `vmdocker/vmdocker/capability/`：`CollectPublic` / `Preview` / public.zip 打包/解包、Import 落位 |
 | —（无） | `vmdocker.apply()` 加 Export(含 dry_run Preview)/Import Action 分发 |
 | —（无） | env.go **无新增**：不维护软链接视图（public=profile 真相、private=HOME） |
+| `main.go`+`server/`+`runtime/`（`/vmm` 适配器） | **不迁移、不 import**；保持独立仓，编译成 adapter binary 供 vmdocker 按 `FROM` 注入 |
 
-`vmdocker_agent` 侧：**无改动**；它仍只是被构建进镜像、提供 `/vmm/*` 运行时服务的程序。`vmdocker_agent/modulegen` 与 `cmd/module` 在迁移完成后废弃。
+`vmdocker_agent` 侧：**无源码改动**；它编译出的 `/vmm` 适配器 binary 是 vmdocker 构建的一个输入制品。`vmdocker_agent/modulegen` 与 `cmd/module` 在迁移完成后废弃（其能力已在 vmdocker 侧重建）。
+
+**adapter binary 的供给（实现待定项，非阻塞）**：vmdocker 需要一份"按 `FROM`/`RUNTIME_TYPE` → adapter binary"的索引来源。候选：① 随 vmdocker 发布内嵌；② 从制品仓/镜像按版本拉取；③ 构建配置里给已知路径。本 spec 只约定"平台注入"这一契约，具体供给方式在实现计划里定。
 
 > 错误码：`FORMAT_MISMATCH` / `TOO_LARGE` / `MEMBER_MISMATCH` / `PATH_ESCAPE` / `NO_PUBLIC` / `CONFLICT`，统一经 `Result.Error` 回传。
 
@@ -393,7 +433,7 @@ flowchart TB
 
 ## 16. 实施顺序
 
-1. host：`modulebuild` 包——迁移现有 `modulegen` + 新增 `GenerateDockerfile(profile)` + 多负载 `PackModule` + 单测。
+1. host：`modulebuild` 包——迁移现有 `modulegen` + 新增 `GenerateDockerfile(profile)`（含 B2 注入 adapter binary）+ `FROM`/`RUNTIME_TYPE`→adapter binary 的供给方式 + 多负载 `PackModule` + 单测。
 2. host：`cmd/module` 迁移为消费 `modulebuild` 的离线 CLI（构建 module 流程）+ 端到端。
 3. host：`capability` 包——`CollectPublic`/`Preview` + public.zip 打包/解包/Import 落位 + 单测（含 round-trip）。
 4. host：`vmdocker.apply()` Export(含 dry_run Preview)/Import Action 分发（§12）+ 测试。
@@ -416,4 +456,5 @@ flowchart TB
 | public 定义 | 硬编码 `SOUL.md`/`skills` | **`[vmdocker].public` 目录清单**；只支持目录，解压到 `/home/hymx` |
 | public/private 视图 | 软链接视图 + `ensureWorkspaceViews` | **取消**：public=profile 唯一真相，private=HOME，无视图、无 env.go 新增 |
 | 代码归属 | vmdocker（capability 包） | **host vmdocker 收拢**：modulebuild + cmd/module + capability；agent 无感知 |
+| 工程边界 | 未明确 | **B+B2**：vmdocker 自包含（不含 agent 源码）；agent 适配器为预编译 binary，按 `FROM` 平台注入（§4.1/§6/§13） |
 | 构建加固 | 无 | 固定 `hymx` 用户、仅 HOME、profile 入镜像、不可关闭 |
