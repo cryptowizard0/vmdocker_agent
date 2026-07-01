@@ -1,7 +1,7 @@
 # vmdocker Agent Profile / Module 构建与 Export / Import 架构设计
 
-- 日期：2026-06-16
-- 状态：已评审（v3，profile 驱动），待实现
+- 日期：2026-06-16（确认：2026-06-18）
+- 状态：**已确认**（v3，profile 驱动），待实现
 - 涉及仓库：
   - `vmdocker`：**本功能的唯一实现工程**——host 侧编排、docker 生命周期、profile→Dockerfile→build→module 全套构建、离线构建 CLI、运行时 Export/Import/Preview
   - `vmdocker_agent`：容器内 `/vmm` 运行时适配器，**独立编译成一个可执行文件**；由 vmdocker 构建时按 `FROM`/`RUNTIME_TYPE` 自动注入镜像（**B2 平台注入**）。是**预编译 binary 产物**，非 vmdocker 的源码依赖；对本功能无感知
