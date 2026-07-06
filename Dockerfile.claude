@@ -13,8 +13,7 @@ USER root
 WORKDIR /app
 
 COPY --from=builder /app/main /app/main
-COPY start-vmdocker-agent.sh /usr/local/bin/start-vmdocker-agent.sh
-COPY bootstrap/claude.sh /usr/local/lib/vmdocker-agent/bootstrap/claude.sh
+COPY startup/claude.sh /usr/local/lib/vmdocker-agent/user-startup.sh
 
 RUN set -eux; \
     if command -v apt-get >/dev/null 2>&1; then \
@@ -35,14 +34,14 @@ RUN set -eux; \
     rm -f /etc/sudoers.d/agent
 
 RUN set -eux; \
-    chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /usr/local/lib/vmdocker-agent/bootstrap/claude.sh; \
+    chmod +x /app/main /usr/local/lib/vmdocker-agent/user-startup.sh; \
     rm -rf /home/agent/workspace; \
-    chown -R agent:agent /app /usr/local/bin/start-vmdocker-agent.sh /usr/local/lib/vmdocker-agent
+    chown -R agent:agent /app /usr/local/lib/vmdocker-agent
 
 RUN set -eux; \
     test ! -e /etc/sudoers.d/agent; \
     command -v claude >/dev/null 2>&1; \
-    test -x /usr/local/lib/vmdocker-agent/bootstrap/claude.sh; \
+    test -x /usr/local/lib/vmdocker-agent/user-startup.sh; \
     if command -v sudo >/dev/null 2>&1; then \
         su -s /bin/sh agent -c '! sudo -n true'; \
     fi
@@ -55,4 +54,4 @@ ENV NODE_OPTIONS=--use-env-proxy
 USER agent
 WORKDIR /workspace
 
-ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]
+ENTRYPOINT ["/app/main"]

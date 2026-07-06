@@ -19,8 +19,7 @@ COPY --from=openclaw /usr/local/bin/openclaw /usr/local/bin/openclaw
 COPY --from=openclaw /app/openclaw.mjs /app/openclaw.mjs
 COPY --from=builder /app/main /app/main
 COPY --from=builder /app/bootstrap /app/bootstrap
-COPY start-vmdocker-agent.sh /usr/local/bin/start-vmdocker-agent.sh
-COPY bootstrap/ /usr/local/lib/vmdocker-agent/bootstrap/
+COPY startup/openclaw.sh /usr/local/lib/vmdocker-agent/user-startup.sh
 COPY openclaw.default.json /app/openclaw.default.json
 
 RUN set -eux; \
@@ -42,14 +41,14 @@ RUN set -eux; \
     rm -f /etc/sudoers.d/agent
 
 RUN set -eux; \
-    chmod +x /usr/local/bin/start-vmdocker-agent.sh /app/main /app/bootstrap /app/openclaw.mjs /usr/local/lib/vmdocker-agent/bootstrap/*.sh; \
+    chmod +x /app/main /app/bootstrap /app/openclaw.mjs /usr/local/lib/vmdocker-agent/user-startup.sh; \
     rm -rf /home/agent/workspace; \
-    chown -R agent:agent /app /usr/local/bin/start-vmdocker-agent.sh /usr/local/lib/vmdocker-agent
+    chown -R agent:agent /app /usr/local/lib/vmdocker-agent
 
 RUN set -eux; \
     test ! -e /etc/sudoers.d/agent; \
     command -v openclaw >/dev/null 2>&1; \
-    test -x /usr/local/lib/vmdocker-agent/bootstrap/openclaw.sh; \
+    test -x /usr/local/lib/vmdocker-agent/user-startup.sh; \
     if command -v sudo >/dev/null 2>&1; then \
         su -s /bin/sh agent -c '! sudo -n true'; \
     fi
@@ -68,4 +67,4 @@ ENV NODE_OPTIONS=--use-env-proxy
 USER agent
 WORKDIR /workspace
 
-ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]
+ENTRYPOINT ["/app/main"]
