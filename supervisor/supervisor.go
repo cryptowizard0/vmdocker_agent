@@ -51,6 +51,7 @@ func (s *Supervisor) Start() error {
 		logFile.Close()
 		return fmt.Errorf("start start.sh: %w", err)
 	}
+	logFile.Close() // child holds its own dup of the fd; parent's copy not needed
 
 	s.mu.Lock()
 	s.cmd = cmd
