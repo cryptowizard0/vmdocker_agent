@@ -15,9 +15,10 @@ import (
 var log = common.NewLog("server")
 
 type Server struct {
-	engine *gin.Engine
-	port   int
-	srv    *http.Server
+	engine   *gin.Engine
+	port     int
+	srv      *http.Server
+	launcher runtime.Launcher
 
 	runtime *runtime.Runtime
 	aoPath  string
@@ -27,8 +28,9 @@ type Server struct {
 func New(port int) *Server {
 	engine := gin.Default()
 	return &Server{
-		engine: engine,
-		port:   port,
+		engine:   engine,
+		port:     port,
+		launcher: runtime.LauncherFor(runtime.CurrentRuntimeType()),
 		// outgoingChan: make(chan nodeSchema.Outgoing),
 		aoPath: getEnvOrDefault("AO_PATH", "./ao/2.0.1"),
 	}

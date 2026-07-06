@@ -2,7 +2,9 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +17,11 @@ import (
 	"github.com/gin-gonic/gin"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 )
+
+type stubLauncher struct{ err error }
+
+func (s stubLauncher) Prepare() ([]string, error)  { return nil, nil }
+func (s stubLauncher) Ready(context.Context) error { return s.err }
 
 func setupTestServer(t *testing.T) *Server {
 	t.Helper()
@@ -76,6 +83,26 @@ func TestHealth(t *testing.T) {
 	}
 	if res["status"] != "ok" {
 		t.Fatalf("expected status ok, got %q", res["status"])
+	}
+}
+
+func TestHealthReadyReturns200(t *testing.T) {
+	s := setupTestServer(t)
+	s.launcher = stubLauncher{err: nil}
+
+	w := performJSONRequest(t, s, http.MethodPost, "/vmm/health", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+}
+
+func TestHealthNotReadyReturns503(t *testing.T) {
+	s := setupTestServer(t)
+	s.launcher = stubLauncher{err: errors.New("engine down")}
+
+	w := performJSONRequest(t, s, http.MethodPost, "/vmm/health", nil)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", w.Code)
 	}
 }
 
