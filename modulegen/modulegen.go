@@ -24,7 +24,7 @@ import (
 const (
 	DefaultSandboxAgent        = "shell"
 	DefaultOpenclawVersion     = "2026.3.1-beta.1"
-	DefaultStartCommand        = "/usr/local/bin/start-vmdocker-agent.sh"
+	DefaultStartCommand        = "/app/main"
 	ModuleFormat               = "hymx.vmdocker.v0.0.1"
 	ImageSourceTag             = "Image-Source"
 	ImageArchiveTag            = "Image-Archive-Format"
