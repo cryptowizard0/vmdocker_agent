@@ -3,8 +3,11 @@ package supervisor
 
 import (
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -42,4 +45,59 @@ func TestStartMissingHookIsNoOp(t *testing.T) {
 	if s.PGID() != 0 {
 		t.Fatalf("no process should have been started, PGID=%d", s.PGID())
 	}
+}
+
+func TestReapLoopInvokesReapOnSignal(t *testing.T) {
+	s := New("", "") // no process needed for this wiring test
+	var calls int32
+	s.reap = func() { atomic.AddInt32(&calls, 1) }
+
+	ch := make(chan os.Signal, 1)
+	go s.ReapLoop(ch)
+
+	ch <- syscall.SIGCHLD
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&calls) >= 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("reap was not invoked on SIGCHLD, calls=%d", atomic.LoadInt32(&calls))
+}
+
+func TestForwardSignalsProcessGroup(t *testing.T) {
+	dir := t.TempDir()
+	hook := filepath.Join(dir, "start.sh")
+	marker := filepath.Join(dir, "term.marker")
+	// Trap TERM: create the marker and exit; otherwise wait.
+	script := "#!/bin/sh\ntrap 'touch " + marker + "; exit 0' TERM\n(while true; do sleep 0.1; done)\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(hook, filepath.Join(dir, "start.log"))
+	// Reap so the child does not linger as a zombie after it exits.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGCHLD)
+	defer signal.Stop(sig)
+	go s.ReapLoop(sig)
+
+	if err := s.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond) // let the trap install
+
+	if err := s.Forward(syscall.SIGTERM); err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("TERM was not delivered to the process group")
 }

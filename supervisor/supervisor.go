@@ -66,6 +66,34 @@ func (s *Supervisor) PGID() int {
 	return s.pgid
 }
 
-// reapZombies is a placeholder for Task 3. Task 3 will implement zombie reaping.
-// For Task 2, this is a no-op to keep the code building.
-func reapZombies() {}
+// reapZombies drains all reapable children. As PID 1 the adapter inherits
+// orphaned engine processes; this prevents zombie accumulation.
+func reapZombies() {
+	for {
+		var ws syscall.WaitStatus
+		pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
+		if pid <= 0 || err != nil {
+			return
+		}
+	}
+}
+
+// ReapLoop reaps children whenever a SIGCHLD arrives on sigchld.
+func (s *Supervisor) ReapLoop(sigchld <-chan os.Signal) {
+	for range sigchld {
+		s.reap()
+	}
+}
+
+// Forward sends sig to the start.sh process group (negative pgid). No-op if no
+// process was started.
+func (s *Supervisor) Forward(sig syscall.Signal) error {
+	pgid := s.PGID()
+	if pgid == 0 {
+		return nil
+	}
+	if err := syscall.Kill(-pgid, sig); err != nil {
+		return fmt.Errorf("signal process group %d: %w", pgid, err)
+	}
+	return nil
+}
