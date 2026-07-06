@@ -147,10 +147,7 @@ start_container() {
     -e HOME=/runtime/.home \
     "${IMAGE_NAME}" >/dev/null
   wait_for_health "${container_name}"
-  docker exec "${container_name}" test -x /usr/local/lib/vmdocker-agent/bootstrap/telegramcustomer.sh
-  docker exec "${container_name}" test ! -e /usr/local/lib/vmdocker-agent/bootstrap/openclaw.sh
-  assert_container_logs_contain "${container_name}" "[bootstrap][telegramcustomer][info] telegramcustomer runtime bootstrap ready" "telegramcustomer bootstrap"
-  assert_container_logs_not_contains "${container_name}" "[bootstrap][openclaw][info] starting openclaw gateway" "telegramcustomer bootstrap isolation"
+  docker exec "${container_name}" test -x /usr/local/lib/vmdocker-agent/user-startup.sh
 }
 
 require_non_empty_env "BOT_TOKEN"

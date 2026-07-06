@@ -185,10 +185,7 @@ start_container() {
     -e HOME=/runtime/.home \
     "${IMAGE_NAME}" >/dev/null
   wait_for_health "${container_name}"
-  docker exec "${container_name}" test -x /usr/local/lib/vmdocker-agent/bootstrap/claude.sh
-  docker exec "${container_name}" test ! -e /usr/local/lib/vmdocker-agent/bootstrap/openclaw.sh
-  assert_container_logs_contain "${container_name}" "[bootstrap][claude][info] claude runtime bootstrap ready" "claude bootstrap"
-  assert_container_logs_not_contains "${container_name}" "[bootstrap][openclaw][info] starting openclaw gateway" "claude bootstrap isolation"
+  docker exec "${container_name}" test -x /usr/local/lib/vmdocker-agent/user-startup.sh
 }
 
 require_non_empty_env "ANTHROPIC_API_KEY"

@@ -11,7 +11,7 @@ This repository is a Go service that exposes a VMM-compatible HTTP API.
 - `common/`: shared logging and middleware.
 - `utils/`: helper utilities.
 - `scripts/`: test and utility scripts.
-- `bootstrap/`: runtime-specific startup hooks sourced by the shared entrypoint.
+- `startup/`: default runtime startup templates (`openclaw.sh`, `claude.sh`) copied to `/usr/local/lib/vmdocker-agent/user-startup.sh`.
 - `docker_build_*.sh`, `Dockerfile.*`: container build helpers.
 
 Keep new runtime implementations under `runtime/` and add package-local tests alongside code.
@@ -25,7 +25,6 @@ Keep new runtime implementations under `runtime/` and add package-local tests al
 - `./docker_build_claude.sh [TAG]`: build the Claude-oriented image from `Dockerfile.claude`.
 - `./scripts/docker_test_requests.sh`: OpenClaw container smoke test.
 - `./scripts/docker_test_claude.sh`: Claude container smoke test including checkpoint/restore.
-- `./scripts/test_start_vmdocker_agent.sh`: local entrypoint dispatch regression test.
 
 ## Coding Style & Naming Conventions
 Use standard Go formatting and idioms:

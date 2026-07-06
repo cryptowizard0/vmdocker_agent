@@ -307,7 +307,6 @@ fi
 echo "[OK] health response:"
 cat /tmp/vmdocker_health_resp.json
 assert_status_ok /tmp/vmdocker_health_resp.json "health"
-assert_container_logs_contain "${CONTAINER_NAME}" "[bootstrap][openclaw][info] openclaw gateway is ready" "openclaw bootstrap"
 
 SPAWN_PAYLOAD_JSON="$(python - <<'PY'
 import json, os

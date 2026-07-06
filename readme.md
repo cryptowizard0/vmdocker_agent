@@ -162,17 +162,17 @@ This is the contract a portable `vmdocker_agent` image should expect from `vmdoc
 
 Sandbox startup now runs a security audit before launching OpenClaw. The image treats passwordless `sudo` for `agent` as a fatal misconfiguration and refuses to start if it is still present. Platform-level exposures such as `docker.sock`, `virtiofs`, and missing AppArmor/SELinux visibility are logged as high-priority warnings but do not block startup, because they are controlled by Docker Sandbox rather than this image.
 
-Runtime bootstrap now uses a shared entrypoint plus runtime-specific hooks:
+Runtime startup now runs under the Go adapter binary as the container entrypoint:
 
-- shared entrypoint: `/usr/local/bin/start-vmdocker-agent.sh`
-- runtime hooks: `/usr/local/lib/vmdocker-agent/bootstrap/<runtime>.sh`
+- entrypoint: `/app/main`
+- author-owned runtime startup script: `/usr/local/lib/vmdocker-agent/user-startup.sh`
 
-The shared entrypoint is responsible for:
+The adapter is responsible for:
 
 - selecting `RUNTIME_TYPE`
 - running common preflight and security audit
-- sourcing the matching runtime bootstrap hook when present
-- `exec`-ing `/app/main`
+- copying the matching runtime startup template (`startup/openclaw.sh`, `startup/claude.sh`) to `/usr/local/lib/vmdocker-agent/user-startup.sh` when the image does not already ship an author-owned `start.sh`
+- supervising the runtime startup script and gating readiness on `/vmm/health` (openclaw: gateway reachable; claude: CLI present)
 
 Recommended deployment posture:
 - Do not treat Docker Sandbox alone as a hard trust boundary.
@@ -211,7 +211,7 @@ docker sandbox run --name hymatrix-openclaw-sandbox -t chriswebber/docker-claude
 After the sandbox is running, start the service inside it with:
 
 ```bash
-docker sandbox exec hymatrix-openclaw-sandbox sh -lc 'start-vmdocker-agent.sh'
+docker sandbox exec hymatrix-openclaw-sandbox sh -lc '/app/main'
 ```
 
 Cloud/provider usage is the only supported sandbox model path in this release. Docker Model Runner localhost bridging is intentionally out of scope for now.
@@ -275,7 +275,7 @@ The generated module does not pin a runtime backend anymore. Backend selection n
 
 The generated module should carry the image startup contract through module tags:
 
-- `Start-Command=/usr/local/bin/start-vmdocker-agent.sh`
+- `Start-Command=/app/main`
 - optional metadata such as `Sandbox-Agent` and `Openclaw-Version`
 
 Recommended split:
@@ -309,9 +309,6 @@ go test -v -cover ./...
 
 # Claude smoke test
 ANTHROPIC_API_KEY=... ./scripts/docker_test_claude.sh
-
-# Entrypoint dispatch regression test
-./scripts/test_start_vmdocker_agent.sh
 
 # Sandbox smoke test
 ./scripts/docker_test_sandbox.sh
@@ -566,7 +563,7 @@ For `Chat`, runtime additionally writes reply text to:
 ```
 .
 ├── common/             # Shared utilities
-├── bootstrap/          # Runtime bootstrap hooks for the shared entrypoint
+├── startup/            # Default runtime startup templates (openclaw.sh, claude.sh)
 ├── runtime/            # Runtime implementations
 │   ├── openclaw/        # Openclaw runtime
 │   └── testrt/          # In-memory test runtime
@@ -576,8 +573,7 @@ For `Chat`, runtime additionally writes reply text to:
 ├── Dockerfile.claude   # Claude image definition
 ├── docker_build_openclaw.sh # OpenClaw image build script
 ├── docker_build_claude.sh # Claude image build script
-├── start-vmdocker-agent.sh # Shared runtime bootstrap entrypoint
-└── main.go            # Application entry point
+└── main.go            # Application entry point (adapter binary, container entrypoint)
 ```
 
 ## 🤝 Contributing
