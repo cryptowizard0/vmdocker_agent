@@ -45,8 +45,8 @@ func LauncherFor(runtimeType string) Launcher {
 
 type alwaysReadyLauncher struct{}
 
-func (alwaysReadyLauncher) Prepare() ([]string, error)        { return nil, nil }
-func (alwaysReadyLauncher) Ready(context.Context) error       { return nil }
+func (alwaysReadyLauncher) Prepare() ([]string, error)  { return nil, nil }
+func (alwaysReadyLauncher) Ready(context.Context) error { return nil }
 
 type claudeLauncher struct{}
 
