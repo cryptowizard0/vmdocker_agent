@@ -765,6 +765,24 @@ func TestSpawnUnsupportedRuntimeType(t *testing.T) {
 	}
 }
 
+func TestBootRuntimeExportsEnvFromLauncher(t *testing.T) {
+	s := New(0)
+	s.launcher = envLauncher{env: []string{"BOOT_TEST_KEY=boot-test-val"}}
+	s.startHookPath = filepath.Join(t.TempDir(), "absent.sh") // missing -> spawn no-op
+
+	if err := s.bootRuntime(); err != nil {
+		t.Fatalf("bootRuntime: %v", err)
+	}
+	if got := os.Getenv("BOOT_TEST_KEY"); got != "boot-test-val" {
+		t.Fatalf("env not exported, got %q", got)
+	}
+}
+
+type envLauncher struct{ env []string }
+
+func (e envLauncher) Prepare() ([]string, error)  { return e.env, nil }
+func (e envLauncher) Ready(context.Context) error { return nil }
+
 func TestApplyInvalidJSON(t *testing.T) {
 	t.Setenv("RUNTIME_TYPE", "test")
 	s := setupTestServer(t)
