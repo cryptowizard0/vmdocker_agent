@@ -35,3 +35,7 @@ Thumbs.db
 codebuddy_design.md
 
 .env
+/.superpowers
+
+# Adapter build output (scripts/build.sh)
+/build/
