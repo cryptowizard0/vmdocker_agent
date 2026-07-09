@@ -10,7 +10,7 @@ require (
 	github.com/hymatrix/hymx v0.4.8
 	github.com/inconshreveable/log15 v2.16.0+incompatible
 	github.com/permadao/goar v1.1.1
-	github.com/xingj404-lab/claude-gw v0.0.1
+	github.com/xingj404-lab/claude-gw v0.0.0-20260512071542-65c73c2a8576
 )
 
 require (
@@ -74,5 +74,3 @@ require (
 	gopkg.in/h2non/gentleman.v2 v2.0.5 // indirect
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
-
-replace github.com/xingj404-lab/claude-gw => /Users/sandyzhou/codex-project/claude-gw
