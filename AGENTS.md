@@ -10,21 +10,19 @@ This repository is a Go service that exposes a VMM-compatible HTTP API.
 - `runtime/openclaw/`: Openclaw gateway-backed runtime (`openclaw.go`: core logic, `tools.go`: tool definitions, `setup.go`: initialization, `gateway.go`: HTTP client).
 - `common/`: shared logging and middleware.
 - `utils/`: helper utilities.
-- `scripts/`: test and utility scripts.
-- `startup/`: default runtime startup templates (`openclaw.sh`, `claude.sh`) copied to `/usr/local/lib/vmdocker-agent/user-startup.sh`.
-- `docker_build_*.sh`, `Dockerfile.*`: container build helpers.
+- `scripts/build.sh`: builds the adapter entrypoint binary (`build/vmdocker-agent`, linux).
+
+This repository produces **only** the `/vmm` adapter entrypoint binary. Base images and module/image construction live in **vmdockerv2** (`vmdocker/modulebuild`); vmdocker_agent does not build images. vmdockerv2 injects the adapter binary at module-build time via `VMDOCKER_AGENT_BIN`.
 
 Keep new runtime implementations under `runtime/` and add package-local tests alongside code.
 
 ## Build, Test, and Development Commands
+- `scripts/build.sh [GOARCH]`: build the adapter entrypoint binary → `build/vmdocker-agent` (linux; arch defaults to the host). This is the artifact vmdockerv2 consumes via `VMDOCKER_AGENT_BIN`.
 - `go run main.go`: run the API locally on port `8080`.
-- `go build -o vmdocker-container`: build local binary.
-- `go test ./...`: run all Go tests (currently passes).
+- `go test ./...`: run all Go tests.
 - `go test -v -cover ./...`: verbose tests with coverage.
-- `./docker_build_openclaw.sh [TAG]`: build the OpenClaw-oriented image from `Dockerfile.openclaw`.
-- `./docker_build_claude.sh [TAG]`: build the Claude-oriented image from `Dockerfile.claude`.
-- `./scripts/docker_test_requests.sh`: OpenClaw container smoke test.
-- `./scripts/docker_test_claude.sh`: Claude container smoke test including checkpoint/restore.
+
+Dependencies `github.com/hymatrix/*` and `github.com/xingj404-lab/claude-gw` are fetched direct over github (not the public proxy). `scripts/build.sh` sets `GOPRIVATE` for you; for bare `go build`/`go test` on a cold module cache, first `export GOPRIVATE=github.com/hymatrix,github.com/xingj404-lab` (github SSH/token access required).
 
 ## Coding Style & Naming Conventions
 Use standard Go formatting and idioms:
