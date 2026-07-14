@@ -27,7 +27,7 @@ func setupTestServer(t *testing.T) *Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	s := New(0)
+	s := New(0, nil)
 	s.engine = gin.New()
 
 	engine := s.engine.Group("/vmm")
@@ -766,7 +766,7 @@ func TestSpawnUnsupportedRuntimeType(t *testing.T) {
 }
 
 func TestBootRuntimeExportsEnvFromLauncher(t *testing.T) {
-	s := New(0)
+	s := New(0, nil)
 	s.launcher = envLauncher{env: []string{"BOOT_TEST_KEY=boot-test-val"}}
 	s.startHookPath = filepath.Join(t.TempDir(), "absent.sh") // missing -> spawn no-op
 

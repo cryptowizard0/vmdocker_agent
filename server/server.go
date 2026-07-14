@@ -24,19 +24,21 @@ type Server struct {
 
 	sup           *supervisor.Supervisor
 	startHookPath string
+	command       []string
 
 	runtime *runtime.Runtime
 	aoPath  string
 	// outgoingChan chan nodeSchema.Outgoing // used to send messages to Cu
 }
 
-func New(port int) *Server {
+func New(port int, command []string) *Server {
 	engine := gin.Default()
 	return &Server{
 		engine:   engine,
 		port:     port,
 		launcher: runtime.LauncherFor(runtime.CurrentRuntimeType()),
 		// outgoingChan: make(chan nodeSchema.Outgoing),
+		command:       command,
 		aoPath:        getEnvOrDefault("AO_PATH", "./ao/2.0.1"),
 		startHookPath: getEnvOrDefault("VMDOCKER_USER_STARTUP_HOOK", "/usr/local/lib/vmdocker-agent/user-startup.sh"),
 	}
@@ -67,7 +69,7 @@ func (s *Server) bootRuntime() error {
 	}
 
 	logPath := getEnvOrDefault("VMDOCKER_USER_STARTUP_LOG", "/tmp/vmdocker-user-startup.log")
-	s.sup = supervisor.New(s.startHookPath, logPath)
+	s.sup = supervisor.New(s.command, s.startHookPath, logPath)
 
 	sigchld := make(chan os.Signal, 1)
 	signal.Notify(sigchld, syscall.SIGCHLD)

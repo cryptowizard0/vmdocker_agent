@@ -13,6 +13,7 @@ import (
 // captures its output. The adapter (PID 1) uses PGID to forward signals to the
 // engine even after start.sh exits.
 type Supervisor struct {
+	command  []string
 	hookPath string
 	logPath  string
 
@@ -24,18 +25,21 @@ type Supervisor struct {
 	reap func()
 }
 
-func New(hookPath, logPath string) *Supervisor {
-	return &Supervisor{hookPath: hookPath, logPath: logPath, reap: reapZombies}
+func New(command []string, hookPath, logPath string) *Supervisor {
+	return &Supervisor{command: command, hookPath: hookPath, logPath: logPath, reap: reapZombies}
 }
 
-// Start launches `sh <hookPath>` with stdout+stderr redirected to logPath in a
-// new process group. A missing hook is a no-op.
+// Start launches the user command in a new process group with stdout+stderr
+// redirected to logPath. A provided command (the adapter's argv, i.e. the image
+// CMD) wins; otherwise the hook script at hookPath is run via `sh` when it
+// exists. With neither a command nor a hook, Start is a no-op.
 func (s *Supervisor) Start() error {
-	if _, err := os.Stat(s.hookPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("stat start hook: %w", err)
+	cmd, err := s.buildCmd()
+	if err != nil {
+		return err
+	}
+	if cmd == nil {
+		return nil // neither a command nor a hook: nothing to run
 	}
 
 	logFile, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
@@ -43,13 +47,12 @@ func (s *Supervisor) Start() error {
 		return fmt.Errorf("open start log: %w", err)
 	}
 
-	cmd := exec.Command("sh", s.hookPath)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
-		return fmt.Errorf("start start.sh: %w", err)
+		return fmt.Errorf("start user command: %w", err)
 	}
 	logFile.Close() // child holds its own dup of the fd; parent's copy not needed
 
@@ -58,6 +61,21 @@ func (s *Supervisor) Start() error {
 	s.pgid = cmd.Process.Pid // equals the new pgid because Setpgid is set
 	s.mu.Unlock()
 	return nil
+}
+
+// buildCmd selects what to launch: a provided command wins; otherwise the hook
+// script if it exists; otherwise nil, meaning nothing to run.
+func (s *Supervisor) buildCmd() (*exec.Cmd, error) {
+	if len(s.command) > 0 {
+		return exec.Command(s.command[0], s.command[1:]...), nil
+	}
+	if _, err := os.Stat(s.hookPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat start hook: %w", err)
+	}
+	return exec.Command("sh", s.hookPath), nil
 }
 
 func (s *Supervisor) PGID() int {
