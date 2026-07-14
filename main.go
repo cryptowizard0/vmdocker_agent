@@ -1,10 +1,15 @@
 package main
 
 import (
+	"os"
+
 	"github.com/cryptowizard0/vmdocker_agent/server"
 )
 
 func main() {
-	server := server.New(8080)
-	server.Run()
+	// os.Args[1:] is the adapter's command — the image CMD appended after the
+	// ENTRYPOINT adapter. Empty when the module declares no CMD, in which case
+	// the supervisor falls back to the user-startup hook.
+	srv := server.New(8080, os.Args[1:])
+	srv.Run()
 }

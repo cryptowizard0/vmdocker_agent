@@ -2,7 +2,9 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,11 +18,16 @@ import (
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 )
 
+type stubLauncher struct{ err error }
+
+func (s stubLauncher) Prepare() ([]string, error)  { return nil, nil }
+func (s stubLauncher) Ready(context.Context) error { return s.err }
+
 func setupTestServer(t *testing.T) *Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	s := New(0)
+	s := New(0, nil)
 	s.engine = gin.New()
 
 	engine := s.engine.Group("/vmm")
@@ -76,6 +83,26 @@ func TestHealth(t *testing.T) {
 	}
 	if res["status"] != "ok" {
 		t.Fatalf("expected status ok, got %q", res["status"])
+	}
+}
+
+func TestHealthReadyReturns200(t *testing.T) {
+	s := setupTestServer(t)
+	s.launcher = stubLauncher{err: nil}
+
+	w := performJSONRequest(t, s, http.MethodPost, "/vmm/health", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+}
+
+func TestHealthNotReadyReturns503(t *testing.T) {
+	s := setupTestServer(t)
+	s.launcher = stubLauncher{err: errors.New("engine down")}
+
+	w := performJSONRequest(t, s, http.MethodPost, "/vmm/health", nil)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", w.Code)
 	}
 }
 
@@ -737,6 +764,24 @@ func TestSpawnUnsupportedRuntimeType(t *testing.T) {
 		t.Fatalf("expected unsupported runtime error, got %q", res["error"])
 	}
 }
+
+func TestBootRuntimeExportsEnvFromLauncher(t *testing.T) {
+	s := New(0, nil)
+	s.launcher = envLauncher{env: []string{"BOOT_TEST_KEY=boot-test-val"}}
+	s.startHookPath = filepath.Join(t.TempDir(), "absent.sh") // missing -> spawn no-op
+
+	if err := s.bootRuntime(); err != nil {
+		t.Fatalf("bootRuntime: %v", err)
+	}
+	if got := os.Getenv("BOOT_TEST_KEY"); got != "boot-test-val" {
+		t.Fatalf("env not exported, got %q", got)
+	}
+}
+
+type envLauncher struct{ env []string }
+
+func (e envLauncher) Prepare() ([]string, error)  { return e.env, nil }
+func (e envLauncher) Ready(context.Context) error { return nil }
 
 func TestApplyInvalidJSON(t *testing.T) {
 	t.Setenv("RUNTIME_TYPE", "test")
